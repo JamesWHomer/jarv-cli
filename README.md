@@ -10,11 +10,24 @@ jarv whats the meaning of life?
 jarv what did the fox say?
 jarv bring up the man page for the uhhh exponent function?
 jarv commit all these files
+jarv session
 ```
 
-Run `jarv` with no prompt to start heads-up mode, where you can keep sending prompts without rerunning the command each time.
+## Heads-Up Mode
 
-In heads-up mode, type a prompt and press Enter. Type `exit` or `quit`, or press Ctrl+C, to leave.
+Run `jarv` with no prompt to start heads-up mode: an interactive prompt loop for repeated questions and tasks.
+
+```bash
+jarv
+```
+
+In heads-up mode:
+
+- Type a prompt and press Enter to send it.
+- Keep sending prompts without rerunning `jarv`.
+- Type `exit` or `quit`, or press Ctrl+C, to leave.
+
+Use `jarv session` when you want heads-up mode with a fresh, independent history for that terminal run.
 
 ## Install
 
@@ -75,6 +88,7 @@ Default config:
   "reasoning_effort": "",
   "max_history": 40,
   "command_timeout": 60,
+  "history_scope": "global",
   "system_prompt": "You are Jarv, a helpful CLI assistant..."
 }
 ```
@@ -84,9 +98,10 @@ Config notes:
 - `api_key` is read from config first. If it is empty, Jarv uses `OPENAI_API_KEY`.
 - `model` is the OpenAI model name to use.
 - `reasoning_effort` is sent as `{ "effort": "..." }` when non-empty. Leave it empty to disable.
-- `max_history` is the number of recent messages Jarv keeps as context and saves in `~/.jarv/history.json`.
+- `max_history` is the number of recent messages Jarv keeps as context.
 - `command_timeout` is the number of seconds before a shell command is killed.
-- `system_prompt` is sent to the model along with basic system info like OS, current working directory, and shell.
+- `history_scope` controls where normal Jarv history is stored. Use `global` for shared history or `terminal` for one history per detected terminal. The default is `global`.
+- `system_prompt` is sent to the model along with basic system info like OS, current working directory, shell, and session context.
 
 You can edit the JSON file directly or use `jarv set` / `jarv unset`.
 
@@ -94,8 +109,9 @@ You can edit the JSON file directly or use `jarv set` / `jarv unset`.
 
 | Command | Description |
 | --- | --- |
-| `jarv` | Start heads-up mode for repeated prompts |
+| `jarv` | Start heads-up mode: an interactive prompt loop for repeated prompts |
 | `jarv <anything>` | Ask Jarv a question or give it a task |
+| `jarv session` | Start heads-up mode with fresh independent history for this terminal run |
 | `jarv set <key> <value>` | Set a config value |
 | `jarv unset <key>` | Reset a config key to its default |
 | `jarv clear` | Clear conversation history |
@@ -110,8 +126,18 @@ You can edit the JSON file directly or use `jarv set` / `jarv unset`.
 Jarv stores local state in `~/.jarv/`:
 
 - `config.json` - settings and optional API key
-- `history.json` - recent conversation history
+- `history.json` - global conversation history
+- `history-<session-id>.json` - per-terminal or independent session history
+- `sessions.json` - terminal/session metadata
 - `last_sha.txt` - last seen GitHub commit SHA for update checks
+
+## History and sessions
+
+By default, Jarv uses global history, so all terminals share `~/.jarv/history.json`. When a global-history prompt comes from a new or different terminal, Jarv sends that context internally to the model along with the time since the previous user message.
+
+Set `history_scope` to `terminal` to keep normal Jarv history per detected terminal. Jarv detects terminals from environment values such as `WT_SESSION`, `TERM_SESSION_ID`, `TMUX`, or `STY`, with a parent-process fallback.
+
+`jarv session` always starts an independent heads-up session with its own history file, regardless of `history_scope`.
 
 ## Notes
 
