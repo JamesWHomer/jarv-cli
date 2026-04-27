@@ -9,6 +9,8 @@ import subprocess
 import threading
 import urllib.request
 import signal
+import hashlib
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from pathlib import Path
 from openai import OpenAI, OpenAIError
@@ -29,6 +31,7 @@ __version__ = "0.1.0"
 CONFIG_DIR = Path.home() / ".jarv"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 HISTORY_FILE = CONFIG_DIR / "history.json"
+SESSIONS_FILE = CONFIG_DIR / "sessions.json"
 SHA_FILE = CONFIG_DIR / "last_sha.txt"
 
 GITHUB_REPO = "JamesWHomer/jarv"
@@ -49,6 +52,7 @@ DEFAULT_CONFIG = {
     "reasoning_effort": "",
     "max_history": 40,
     "command_timeout": 60,
+    "history_scope": "global",
     "system_prompt": DEFAULT_SYSTEM_PROMPT,
 }
 
@@ -116,14 +120,14 @@ def save_config(config: dict) -> None:
         sys.exit(1)
 
 
-def load_history() -> list:
-    if not HISTORY_FILE.exists():
+def load_history(path: Path = HISTORY_FILE) -> list:
+    if not path.exists():
         return []
     try:
-        history = json.loads(HISTORY_FILE.read_text(encoding="utf-8"))
+        history = json.loads(path.read_text(encoding="utf-8"))
         if isinstance(history, list):
             return history
-        console.print(f"[yellow]Ignoring invalid history format:[/yellow] {HISTORY_FILE}")
+        console.print(f"[yellow]Ignoring invalid history format:[/yellow] {path}")
     except json.JSONDecodeError as e:
         console.print(f"[yellow]Ignoring malformed history:[/yellow] {e}")
     except (OSError, UnicodeDecodeError) as e:
@@ -131,12 +135,208 @@ def load_history() -> list:
     return []
 
 
-def save_history(history: list) -> None:
+def save_history(history: list, path: Path = HISTORY_FILE) -> None:
     CONFIG_DIR.mkdir(exist_ok=True)
     try:
-        HISTORY_FILE.write_text(json.dumps(history, indent=2), encoding="utf-8")
+        path.write_text(json.dumps(history, indent=2), encoding="utf-8")
     except OSError as e:
         console.print(f"[yellow]Could not save history:[/yellow] {e}")
+
+
+def load_sessions() -> dict:
+    if not SESSIONS_FILE.exists():
+        return {"sessions": {}, "last_global_session_id": ""}
+    try:
+        data = json.loads(SESSIONS_FILE.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            data.setdefault("sessions", {})
+            data.setdefault("last_global_session_id", "")
+            if isinstance(data["sessions"], dict):
+                return data
+    except json.JSONDecodeError as e:
+        console.print(f"[yellow]Ignoring malformed sessions metadata:[/yellow] {e}")
+    except (OSError, UnicodeDecodeError) as e:
+        console.print(f"[yellow]Could not read sessions metadata:[/yellow] {e}")
+    return {"sessions": {}, "last_global_session_id": ""}
+
+
+def save_sessions(data: dict) -> None:
+    CONFIG_DIR.mkdir(exist_ok=True)
+    try:
+        SESSIONS_FILE.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    except OSError as e:
+        console.print(f"[yellow]Could not save sessions metadata:[/yellow] {e}")
+
+
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def isoformat_utc(dt: datetime) -> str:
+    return dt.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def parse_timestamp(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def format_elapsed(since: str | None, now: datetime) -> str:
+    then = parse_timestamp(since)
+    if then is None:
+        return "unknown"
+    seconds = max(0, int((now - then).total_seconds()))
+    if seconds < 60:
+        return f"{seconds} seconds"
+    minutes = seconds // 60
+    if minutes < 60:
+        return f"{minutes} minutes"
+    hours = minutes // 60
+    if hours < 48:
+        return f"{hours} hours"
+    days = hours // 24
+    return f"{days} days"
+
+
+def get_shell_name() -> str:
+    shell = os.environ.get("SHELL")
+    if not shell:
+        shell = "PowerShell" if os.environ.get("PSModulePath") else os.environ.get("ComSpec", "cmd.exe")
+    return shell
+
+
+def short_hash(value: str, length: int = 12) -> str:
+    return hashlib.sha256(value.encode("utf-8", errors="replace")).hexdigest()[:length]
+
+
+def detect_terminal_session() -> tuple[str, str, str]:
+    candidates = [
+        ("windows-terminal", os.environ.get("WT_SESSION")),
+        ("term-session", os.environ.get("TERM_SESSION_ID")),
+        ("tmux", os.environ.get("TMUX")),
+        ("screen", os.environ.get("STY")),
+    ]
+    for source, value in candidates:
+        if value:
+            session_id = f"{source}-{short_hash(value)}"
+            return session_id, f"{source} {session_id[-6:]}", source
+
+    user = os.environ.get("USERNAME") or os.environ.get("USER") or "unknown-user"
+    raw = "|".join([str(os.getppid()), os.getcwd(), user, get_shell_name()])
+    session_id = f"parent-{short_hash(raw)}"
+    return session_id, f"parent process {os.getppid()}", "parent-process"
+
+
+def independent_session() -> tuple[str, str, str]:
+    now = utc_now()
+    raw = f"{now.isoformat()}|{os.getpid()}|{os.getppid()}|{os.getcwd()}"
+    session_id = f"independent-{short_hash(raw)}"
+    return session_id, f"independent {session_id[-6:]}", "independent"
+
+
+def history_file_for_session(session_id: str) -> Path:
+    return CONFIG_DIR / f"history-{short_hash(session_id)}.json"
+
+
+def last_user_message(history: list) -> dict | None:
+    for item in reversed(history):
+        if isinstance(item, dict) and item.get("role") == "user":
+            return item
+    return None
+
+
+@dataclass
+class SessionContext:
+    scope: str
+    session_id: str
+    session_label: str
+    session_source: str
+    history_file: Path
+    is_new_session: bool
+    previous_user_at: str | None
+    previous_user_session_id: str
+    previous_user_session_label: str
+    previous_global_session_changed: bool
+    now: datetime
+
+    @property
+    def elapsed_since_previous_user(self) -> str:
+        return format_elapsed(self.previous_user_at, self.now)
+
+
+def prepare_session_context(
+    config: dict,
+    *,
+    independent: bool = False,
+    session_override: tuple[str, str, str] | None = None,
+    mark_message: bool = False,
+) -> SessionContext:
+    now = utc_now()
+    if session_override:
+        session_id, session_label, session_source = session_override
+        scope = "independent" if independent else config.get("history_scope", DEFAULT_CONFIG["history_scope"])
+        history_path = history_file_for_session(session_id) if scope != "global" else HISTORY_FILE
+    elif independent:
+        session_id, session_label, session_source = independent_session()
+        scope = "independent"
+        history_path = history_file_for_session(session_id)
+    else:
+        session_id, session_label, session_source = detect_terminal_session()
+        scope = config.get("history_scope", DEFAULT_CONFIG["history_scope"])
+        history_path = HISTORY_FILE if scope == "global" else history_file_for_session(session_id)
+
+    sessions = load_sessions()
+    last_global_session_id = str(sessions.get("last_global_session_id") or "")
+    session_map = sessions.setdefault("sessions", {})
+    is_new_session = session_id not in session_map
+    meta = session_map.setdefault(
+        session_id,
+        {
+            "label": session_label,
+            "source": session_source,
+            "first_seen_at": isoformat_utc(now),
+        },
+    )
+    meta.update(
+        {
+            "label": session_label,
+            "source": session_source,
+            "last_seen_at": isoformat_utc(now),
+            "history_file": str(history_path),
+        }
+    )
+
+    history = load_history(history_path)
+    previous_user = last_user_message(history)
+    previous_user_at = previous_user.get("created_at") if previous_user else None
+    previous_user_session_id = str(previous_user.get("session_id") or "") if previous_user else ""
+    previous_user_session_label = str(previous_user.get("session_label") or "") if previous_user else ""
+    comparison_session_id = previous_user_session_id or last_global_session_id
+    previous_global_session_changed = scope == "global" and bool(comparison_session_id) and comparison_session_id != session_id
+
+    if scope == "global":
+        sessions["last_global_session_id"] = session_id
+    if mark_message:
+        meta["last_message_at"] = isoformat_utc(now)
+    save_sessions(sessions)
+
+    return SessionContext(
+        scope=scope,
+        session_id=session_id,
+        session_label=session_label,
+        session_source=session_source,
+        history_file=history_path,
+        is_new_session=is_new_session,
+        previous_user_at=previous_user_at,
+        previous_user_session_id=previous_user_session_id,
+        previous_user_session_label=previous_user_session_label,
+        previous_global_session_changed=previous_global_session_changed,
+        now=now,
+    )
 
 
 DISPLAY_LINE_LIElastic License 2.0 = 30
@@ -269,6 +469,37 @@ def display_command_result(result: CommandResult) -> None:
 def run_command(command: str) -> str:
     return execute_command(command).to_model_output()
 
+
+def to_response_input_item(item: dict) -> dict | None:
+    """Convert one stored history item to a Responses API input item."""
+    role = item.get("role")
+    typ = item.get("type")
+    try:
+        if role == "user":
+            return {"role": "user", "content": str(item.get("content", ""))}
+        if role == "assistant":
+            return {"role": "assistant", "content": str(item.get("content") or "")}
+        if typ == "reasoning" and "id" in item:
+            return {"type": "reasoning", "id": item["id"], "summary": item.get("summary", [])}
+        if typ == "function_call":
+            return {
+                "type": "function_call",
+                "id": item["id"],
+                "call_id": item["call_id"],
+                "name": item["name"],
+                "arguments": item["arguments"],
+            }
+        if typ == "function_call_output":
+            return {
+                "type": "function_call_output",
+                "call_id": item["call_id"],
+                "output": item["output"],
+            }
+    except KeyError:
+        return None
+    return None
+
+
 def build_input(history: list, max_history: int) -> list:
     """Convert stored history to Responses API input format."""
     slice_ = history[-max_history:]
@@ -283,31 +514,9 @@ def build_input(history: list, max_history: int) -> list:
     for m in slice_:
         if not isinstance(m, dict):
             continue
-        role = m.get("role")
-        typ = m.get("type")
-        try:
-            if role == "user":
-                items.append({"role": "user", "content": str(m.get("content", ""))})
-            elif role == "assistant":
-                items.append({"role": "assistant", "content": str(m.get("content") or "")})
-            elif typ == "reasoning" and "id" in m:
-                items.append({"type": "reasoning", "id": m["id"], "summary": m.get("summary", [])})
-            elif typ == "function_call":
-                items.append({
-                    "type": "function_call",
-                    "id": m["id"],
-                    "call_id": m["call_id"],
-                    "name": m["name"],
-                    "arguments": m["arguments"],
-                })
-            elif typ == "function_call_output":
-                items.append({
-                    "type": "function_call_output",
-                    "call_id": m["call_id"],
-                    "output": m["output"],
-                })
-        except KeyError:
-            continue
+        api_item = to_response_input_item(m)
+        if api_item is not None:
+            items.append(api_item)
     return items
 
 
@@ -316,14 +525,28 @@ def get_system_info() -> str:
         f"OS: {platform.system()} {platform.release()}",
         f"CWD: {os.getcwd()}",
     ]
-    shell = os.environ.get("SHELL")
-    if not shell:
-        shell = "PowerShell" if os.environ.get("PSModulePath") else os.environ.get("ComSpec", "cmd.exe")
-    parts.append(f"Shell: {shell}")
+    parts.append(f"Shell: {get_shell_name()}")
     user = os.environ.get("USERNAME") or os.environ.get("USER")
     if user:
         parts.append(f"User: {user}")
     return "\n".join(parts)
+
+
+def get_session_info(context: SessionContext) -> str:
+    previous_session = context.previous_user_session_label or context.previous_user_session_id or "unknown"
+    return "\n".join(
+        [
+            f"History scope: {context.scope}",
+            f"History file: {context.history_file}",
+            f"Current session: {context.session_label} ({context.session_source})",
+            f"Current session id: {context.session_id}",
+            f"New terminal/session: {'yes' if context.is_new_session else 'no'}",
+            f"Previous user message: {context.elapsed_since_previous_user} ago",
+            f"Previous user session: {previous_session}",
+            "Previous global message came from another terminal/session: "
+            f"{'yes' if context.previous_global_session_changed else 'no'}",
+        ]
+    )
 
 
 def validate_config(config: dict) -> bool:
@@ -336,6 +559,11 @@ def validate_config(config: dict) -> bool:
     effort = config.get("reasoning_effort", "")
     if effort is None:
         config["reasoning_effort"] = ""
+
+    history_scope = config.get("history_scope", DEFAULT_CONFIG["history_scope"])
+    if history_scope not in {"global", "terminal"}:
+        console.print("[red]Config 'history_scope' must be 'global' or 'terminal'.[/red]")
+        ok = False
 
     for key in ("max_history", "command_timeout"):
         try:
@@ -350,17 +578,42 @@ def validate_config(config: dict) -> bool:
     return ok
 
 
-def run_agent(query: str, config: dict, client: OpenAI) -> None:
-    history = load_history()
-    max_history = config.get("max_history", DEFAULT_CONFIG["max_history"])
+def history_metadata(context: SessionContext) -> dict:
+    return {
+        "created_at": isoformat_utc(context.now),
+        "session_id": context.session_id,
+        "session_label": context.session_label,
+    }
 
-    history.append({"role": "user", "content": query})
+
+def run_agent(
+    query: str,
+    config: dict,
+    client: OpenAI,
+    session_override: tuple[str, str, str] | None = None,
+    independent: bool = False,
+) -> None:
+    session_context = prepare_session_context(
+        config,
+        independent=independent,
+        session_override=session_override,
+        mark_message=True,
+    )
+    history = load_history(session_context.history_file)
+    max_history = config.get("max_history", DEFAULT_CONFIG["max_history"])
+    metadata = history_metadata(session_context)
+
+    history.append({"role": "user", "content": query, **metadata})
 
     input_items = build_input(history, max_history)
 
     kwargs = dict(
         model=config["model"],
-        instructions=config["system_prompt"] + f"\n\nSystem info:\n{get_system_info()}",
+        instructions=(
+            config["system_prompt"]
+            + f"\n\nSystem info:\n{get_system_info()}"
+            + f"\n\nSession context:\n{get_session_info(session_context)}"
+        ),
         tools=TOOLS,
         input=input_items,
     )
@@ -394,11 +647,13 @@ def run_agent(query: str, config: dict, client: OpenAI) -> None:
                                 reasoning_items.append(event.item)
 
             if tool_calls:
-                new_items = []
+                new_input_items = []
                 for ri in reasoning_items:
-                    rd = {"type": "reasoning", "id": ri.id, "summary": []}
+                    rd = {"type": "reasoning", "id": ri.id, "summary": [], **metadata}
                     history.append(rd)
-                    new_items.append(rd)
+                    api_item = to_response_input_item(rd)
+                    if api_item is not None:
+                        new_input_items.append(api_item)
                 for item in tool_calls:
                     try:
                         args = json.loads(item.arguments or "{}")
@@ -427,29 +682,34 @@ def run_agent(query: str, config: dict, client: OpenAI) -> None:
                         "call_id": item.call_id,
                         "name": item.name,
                         "arguments": item.arguments,
+                        **metadata,
                     }
                     fco = {
                         "type": "function_call_output",
                         "call_id": item.call_id,
                         "output": output,
+                        **metadata,
                     }
                     history.extend([fc, fco])
-                    new_items.extend([fc, fco])
-                kwargs["input"] = kwargs["input"] + new_items
+                    for stored_item in (fc, fco):
+                        api_item = to_response_input_item(stored_item)
+                        if api_item is not None:
+                            new_input_items.append(api_item)
+                kwargs["input"] = kwargs["input"] + new_input_items
             else:
-                history.append({"role": "assistant", "content": reply_text})
-                save_history(history[-max_history:])
+                history.append({"role": "assistant", "content": reply_text, **metadata})
+                save_history(history[-max_history:], session_context.history_file)
                 break
     except KeyboardInterrupt:
         console.print("\n[dim]Interrupted.[/dim]")
-        save_history(history[-max_history:])
+        save_history(history[-max_history:], session_context.history_file)
     except OpenAIError as e:
         console.print(f"[red]OpenAI API error:[/red] {e}")
-        save_history(history[-max_history:])
+        save_history(history[-max_history:], session_context.history_file)
         raise SystemExit(1)
     except Exception as e:
         console.print(f"[red]Unexpected error:[/red] {e}")
-        save_history(history[-max_history:])
+        save_history(history[-max_history:], session_context.history_file)
         raise SystemExit(1)
 
 
@@ -508,6 +768,7 @@ def print_help() -> None:
     cmd_table.add_column(style="dim")
     cmd_table.add_row("jarv", "Start heads-up mode for repeated prompts")
     cmd_table.add_row("jarv <question>", "Ask jarv anything")
+    cmd_table.add_row("jarv session", "Start an independent heads-up session with separate history")
     cmd_table.add_row("jarv set <key> <value>", "Set a config value")
     cmd_table.add_row("jarv unset <key>", "Reset a config key to its default")
     cmd_table.add_row("jarv clear", "Clear conversation history")
@@ -525,6 +786,7 @@ def print_help() -> None:
     key_table.add_row("reasoning_effort", "Reasoning effort value (empty to disable)")
     key_table.add_row("max_history", "Number of messages to keep as context")
     key_table.add_row("command_timeout", "Seconds before a shell command is killed")
+    key_table.add_row("history_scope", "History mode: global or terminal")
     key_table.add_row("system_prompt", "System prompt sent to the model")
 
     console.print(Panel(cmd_table, title="[bold]jarv[/bold]", border_style="bright_black", padding=(1, 2)))
@@ -533,6 +795,7 @@ def print_help() -> None:
     console.print(key_table)
     console.print(f"\n[dim]Config:  {CONFIG_FILE}[/dim]")
     console.print(f"[dim]History: {HISTORY_FILE}[/dim]")
+    console.print(f"[dim]Sessions: {SESSIONS_FILE}[/dim]")
 
 
 def print_about() -> None:
@@ -544,6 +807,7 @@ jarv is a command-line AI assistant powered by OpenAI.
 
 - `jarv` - Start heads-up mode so you can keep sending prompts without rerunning the command.
 - `jarv <question>` - Ask jarv anything. Your words after `jarv` are sent as the user message.
+- `jarv session` - Start heads-up mode with an independent history for this terminal run.
 - `jarv help` - Show the short command overview.
 - `jarv about` - Show this detailed overview.
 - `jarv config` - Show current settings. The API key is masked.
@@ -557,14 +821,17 @@ jarv is a command-line AI assistant powered by OpenAI.
 
 Run `jarv` with no prompt to start an interactive session. Type a prompt and press Enter to send it. Type `exit` or `quit`, or press Ctrl+C, to leave.
 
+Run `jarv session` to start an independent interactive session. It uses a separate history file and does not change your configured default history mode.
+
 ## How jarv works
 
 1. Loads config from `{CONFIG_FILE}`.
-2. Loads recent conversation history from `{HISTORY_FILE}`.
-3. Sends your query, recent history, the configured system prompt, and system info to the OpenAI Responses API.
-4. Streams the assistant response in the terminal.
-5. If the model calls the shell tool, jarv displays the command, runs it, shows stdout/stderr/exit status, and sends the full command result back to the model.
-6. Saves the final assistant response back to history, trimmed to `max_history` items.
+2. Detects the current terminal/session and chooses the configured history scope.
+3. Loads recent conversation history from the active history file.
+4. Sends your query, recent history, the configured system prompt, system info, and session context to the OpenAI Responses API.
+5. Streams the assistant response in the terminal.
+6. If the model calls the shell tool, jarv displays the command, runs it, shows stdout/stderr/exit status, and sends the full command result back to the model.
+7. Saves the final assistant response back to history, trimmed to `max_history` items.
 
 ## Shell command behavior
 
@@ -587,6 +854,7 @@ Keys:
 - `reasoning_effort` - Optional reasoning effort value. Empty disables this setting.
 - `max_history` - Number of history items kept as context. Default: `{DEFAULT_CONFIG['max_history']}`.
 - `command_timeout` - Seconds before a shell command is killed. Default: `{DEFAULT_CONFIG['command_timeout']}`.
+- `history_scope` - History mode. Use `global` for shared history or `terminal` for one history per detected terminal. Default: `{DEFAULT_CONFIG['history_scope']}`.
 - `system_prompt` - Instructions sent to the model before each request.
 
 If the config file does not exist, jarv creates it and exits so you can add an API key.
@@ -594,9 +862,14 @@ If the config file is invalid JSON, jarv backs it up and creates a fresh default
 
 ## History and context
 
-History file: `{HISTORY_FILE}`
+Global history file: `{HISTORY_FILE}`
+Session metadata file: `{SESSIONS_FILE}`
 
-jarv stores recent conversation items locally, including user messages, assistant messages, and tool-call context needed by the Responses API. `jarv clear` empties this file. `jarv history` displays only readable user and assistant messages.
+jarv stores recent conversation items locally, including user messages, assistant messages, and tool-call context needed by the Responses API. `jarv clear` empties the active history file. `jarv history` displays only readable user and assistant messages from the active history.
+
+When `history_scope` is `global`, all terminals share `{HISTORY_FILE}`. jarv still tells the model when a message appears to come from a new or different terminal, and how much time has passed since the previous user message.
+
+When `history_scope` is `terminal`, jarv stores history in `history-<session-id>.json` files under `{CONFIG_DIR}`. `jarv session` always uses an independent `history-<session-id>.json` file for that interactive run, regardless of `history_scope`.
 
 ## Updates
 
@@ -609,6 +882,7 @@ jarv stores recent conversation items locally, including user messages, assistan
 - Config directory: `{CONFIG_DIR}`
 - Config file: `{CONFIG_FILE}`
 - History file: `{HISTORY_FILE}`
+- Session metadata file: `{SESSIONS_FILE}`
 - Last known update SHA: `{SHA_FILE}`
 
 ## Version
@@ -696,17 +970,39 @@ def main() -> None:
         print_about()
         return
 
+    if command == "session":
+        config = load_config()
+        if not validate_config(config):
+            sys.exit(1)
+        api_key = config.get("api_key") or os.environ.get("OPENAI_API_KEY", "")
+        if not api_key:
+            console.print(f"[red]No API key found.[/red] Edit {CONFIG_FILE} or set OPENAI_API_KEY.")
+            sys.exit(1)
+        session = independent_session()
+        console.print(f"[dim]Independent session: {session[1]}[/dim]")
+        client = OpenAI(api_key=api_key)
+        run_heads_up_mode(config, client, session_override=session, independent=True)
+        return
+
     if command == "update":
         cmd_update()
         return
 
     if command == "clear":
-        save_history([])
+        config = load_config()
+        if not validate_config(config):
+            sys.exit(1)
+        session_context = prepare_session_context(config)
+        save_history([], session_context.history_file)
         console.print("[dim]History cleared.[/dim]")
         return
 
     if command == "history":
-        history = load_history()
+        config = load_config()
+        if not validate_config(config):
+            sys.exit(1)
+        session_context = prepare_session_context(config)
+        history = load_history(session_context.history_file)
         if not history:
             console.print("[dim]No history yet.[/dim]")
             return
@@ -769,8 +1065,14 @@ def main() -> None:
         sys.exit(130)
 
 
-def run_heads_up_mode(config: dict, client: OpenAI) -> None:
-    console.print("[bold cyan]jarv heads-up mode[/bold cyan]")
+def run_heads_up_mode(
+    config: dict,
+    client: OpenAI,
+    session_override: tuple[str, str, str] | None = None,
+    independent: bool = False,
+) -> None:
+    title = "jarv independent session" if independent else "jarv heads-up mode"
+    console.print(f"[bold cyan]{title}[/bold cyan]")
     console.print("[dim]Type a prompt and press Enter. Type 'exit' or press Ctrl+C to leave.[/dim]")
     while True:
         try:
@@ -785,7 +1087,13 @@ def run_heads_up_mode(config: dict, client: OpenAI) -> None:
             console.print("[dim]Goodbye.[/dim]")
             return
 
-        run_agent(query, config, client)
+        run_agent(
+            query,
+            config,
+            client,
+            session_override=session_override,
+            independent=independent,
+        )
 
 
 if __name__ == "__main__":
