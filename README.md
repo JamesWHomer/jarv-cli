@@ -13,24 +13,39 @@ jarv commit all these files
 
 ## Install
 
+Requirements:
+
+- Python 3.10+
+- An OpenAI API key
+
 Install directly from GitHub with pip:
 
 ```bash
 pip install git+https://github.com/JamesWHomer/jarv.git
 ```
 
-Requirements:
+Then add your OpenAI API key:
 
-- Python 3.10+
-- An OpenAI API key
+```bash
+jarv set api_key YOUR_OPENAI_API_KEY
+```
 
-After installing, run Jarv once:
+Alternatively, clone the repo and install it locally first:
+
+```bash
+git clone https://github.com/JamesWHomer/jarv.git
+cd jarv
+pip install -e .
+jarv set api_key YOUR_OPENAI_API_KEY
+```
+
+You can verify the install with:
 
 ```bash
 jarv help
 ```
 
-The first run that needs config will create `~/.jarv/config.json` (on Windows, `%USERPROFILE%\.jarv\config.json`). Add your OpenAI API key there, or set the `OPENAI_API_KEY` environment variable.
+The first run that needs config will create `~/.jarv/config.json` (on Windows, `%USERPROFILE%\.jarv\config.json`). You can also set the `OPENAI_API_KEY` environment variable instead of saving the key in Jarv config.
 
 To upgrade later:
 
