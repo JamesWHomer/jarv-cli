@@ -106,19 +106,53 @@ def display_output(output: str) -> None:
 
 def run_command(command: str) -> str:
     try:
-        result = subprocess.run(
-            command, shell=True, capture_output=True, text=True, timeout=60
-        )
+        if platform.system() == "Windows":
+            # Match the shell we advertise to the model in get_system_info().
+            # subprocess with shell=True uses cmd.exe on Windows, which breaks
+            # PowerShell commands like Get-ChildItem.
+            shell_command = [
+                "powershell.exe",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                command,
+            ]
+            proc = subprocess.Popen(
+                shell_command,
+                shell=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+        else:
+            proc = subprocess.Popen(
+                command,
+                shell=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+        try:
+            stdout, stderr = proc.communicate(timeout=60)
+        except KeyboardInterrupt:
+            proc.kill()
+            proc.wait()
+            raise
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+            return "[timed out after 60 seconds]"
         parts = []
-        if result.stdout:
-            parts.append(result.stdout.rstrip())
-        if result.stderr:
-            parts.append(f"[stderr] {result.stderr.rstrip()}")
-        if result.returncode != 0:
-            parts.append(f"[exit code {result.returncode}]")
+        if stdout:
+            parts.append(stdout.rstrip())
+        if stderr:
+            parts.append(f"[stderr] {stderr.rstrip()}")
+        if proc.returncode != 0:
+            parts.append(f"[exit code {proc.returncode}]")
         return "\n".join(parts) if parts else "(no output)"
-    except subprocess.TimeoutExpired:
-        return "[timed out after 60 seconds]"
+    except KeyboardInterrupt:
+        raise
     except Exception as e:
         return f"[error: {e}]"
 
