@@ -124,6 +124,7 @@ def run_agent(
     client: OpenAI,
     session_override: tuple[str, str, str] | None = None,
     independent: bool = False,
+    propagate_keyboard_interrupt: bool = False,
 ) -> None:
     session_context = prepare_session_context(
         config,
@@ -162,10 +163,16 @@ def run_agent(
             reasoning_items = []
             got_text = False
 
+            # Do not use Live's periodic auto-refresh here. On Windows,
+            # repeatedly repainting a console window while jarv is in the
+            # background can make the terminal appear to steal focus from
+            # other applications. Refresh only when the Responses API sends
+            # new text.
             with Live(
                 Spinner("dots", text=" Thinking..."),
-                refresh_per_second=15,
+                refresh_per_second=4,
                 console=console,
+                auto_refresh=False,
             ) as live:
                 with client.responses.stream(**kwargs) as stream:
                     for event in stream:
@@ -173,7 +180,7 @@ def run_agent(
                             if not got_text:
                                 got_text = True
                             reply_text += event.delta
-                            live.update(Markdown(flatten_headings(reply_text)))
+                            live.update(Markdown(flatten_headings(reply_text)), refresh=True)
                         elif event.type == "response.output_item.done":
                             if event.item.type == "function_call":
                                 tool_calls.append(event.item)
@@ -200,12 +207,11 @@ def run_agent(
                     else:
                         console.print()
                         console.print(Rule(f"[bold yellow]$ {escape(cmd)}[/bold yellow]", style="yellow", align="left"))
-                        with Live(
-                            Spinner("dots", text=" Running command..."),
-                            refresh_per_second=15,
-                            console=console,
-                        ):
-                            result = execute_command(cmd, config.get("command_timeout", 60))
+                        # Avoid a constantly repainting spinner while a child
+                        # process is running; on Windows this can cause focus
+                        # annoyances in heads-up mode.
+                        console.print("[dim]Running command...[/dim]")
+                        result = execute_command(cmd, config.get("command_timeout", 60))
                         display_command_result(result)
                         output = result.to_model_output()
                         console.print(Rule(style="bright_black"))
@@ -237,6 +243,8 @@ def run_agent(
     except KeyboardInterrupt:
         console.print("\n[dim]Interrupted.[/dim]")
         save_history(history[-max_history:], session_context.history_file)
+        if propagate_keyboard_interrupt:
+            raise
     except OpenAIError as e:
         console.print(f"[red]OpenAI API error:[/red] {e}")
         save_history(history[-max_history:], session_context.history_file)

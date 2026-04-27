@@ -129,13 +129,18 @@ def run_heads_up_mode(
             console.print("[dim]Goodbye.[/dim]")
             return
 
-        run_agent(
-            query,
-            config,
-            client,
-            session_override=session_override,
-            independent=independent,
-        )
+        try:
+            run_agent(
+                query,
+                config,
+                client,
+                session_override=session_override,
+                independent=independent,
+                propagate_keyboard_interrupt=True,
+            )
+        except KeyboardInterrupt:
+            console.print("\n[dim]Goodbye.[/dim]")
+            return
 
 
 if __name__ == "__main__":
