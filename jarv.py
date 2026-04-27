@@ -25,8 +25,6 @@ from rich import box
 console = Console()
 
 __version__ = "0.1.0"
-VALID_REASONING_EFFORTS = {"", "low", "medium", "high"}
-REASONING_MODEL_PREFIXES = ("o1", "o3", "o4", "gpt-5")
 
 CONFIG_DIR = Path.home() / ".jarv"
 CONFIG_FILE = CONFIG_DIR / "config.json"
@@ -328,10 +326,6 @@ def get_system_info() -> str:
     return "\n".join(parts)
 
 
-def model_supports_reasoning(model: str) -> bool:
-    return model.lower().startswith(REASONING_MODEL_PREFIXES)
-
-
 def validate_config(config: dict) -> bool:
     ok = True
     model = config.get("model")
@@ -342,9 +336,6 @@ def validate_config(config: dict) -> bool:
     effort = config.get("reasoning_effort", "")
     if effort is None:
         config["reasoning_effort"] = ""
-    elif effort not in VALID_REASONING_EFFORTS:
-        console.print("[red]Config 'reasoning_effort' must be one of: low, medium, high, or empty.[/red]")
-        ok = False
 
     for key in ("max_history", "command_timeout"):
         try:
@@ -374,13 +365,8 @@ def run_agent(query: str, config: dict, client: OpenAI) -> None:
         input=input_items,
     )
     effort = config.get("reasoning_effort")
-    if effort and model_supports_reasoning(config["model"]):
+    if effort:
         kwargs["reasoning"] = {"effort": effort}
-    elif effort:
-        console.print(
-            f"[dim]Ignoring reasoning_effort for model '{config['model']}' "
-            "(not a reasoning model).[/dim]"
-        )
 
     try:
         while True:
@@ -534,7 +520,7 @@ def print_help() -> None:
     key_table.add_column(style="dim")
     key_table.add_row("api_key", "OpenAI API key")
     key_table.add_row("model", "Model name (default: gpt-4o-mini)")
-    key_table.add_row("reasoning_effort", "low, medium, high, or empty to disable")
+    key_table.add_row("reasoning_effort", "Reasoning effort value (empty to disable)")
     key_table.add_row("max_history", "Number of messages to keep as context")
     key_table.add_row("command_timeout", "Seconds before a shell command is killed")
     key_table.add_row("system_prompt", "System prompt sent to the model")
