@@ -92,11 +92,14 @@ def build_input(history: list, max_history: int) -> list:
 
 
 def get_system_info() -> str:
+    shell = get_shell_name()
     parts = [
         f"OS: {platform.system()} {platform.release()}",
         f"CWD: {os.getcwd()}",
+        f"Shell: {shell}",
     ]
-    parts.append(f"Shell: {get_shell_name()}")
+    if platform.system() == "Windows" and "PowerShell 5.1" in shell:
+        parts.append("Shell syntax: Windows PowerShell 5.1; `&&` is not supported. Use `;` or `if ($?) { ... }`.")
     user = os.environ.get("USERNAME") or os.environ.get("USER")
     if user:
         parts.append(f"User: {user}")
@@ -163,16 +166,14 @@ def run_agent(
             reasoning_items = []
             got_text = False
 
-            # Do not use Live's periodic auto-refresh here. On Windows,
-            # repeatedly repainting a console window while jarv is in the
-            # background can make the terminal appear to steal focus from
-            # other applications. Refresh only when the Responses API sends
-            # new text.
+            # The spinner only animates when Live periodically refreshes.
+            # Keep the refresh rate low to reduce Windows focus annoyances
+            # while preserving visible "Thinking..." activity.
             with Live(
                 Spinner("dots", text=" Thinking..."),
-                refresh_per_second=4,
+                refresh_per_second=2,
                 console=console,
-                auto_refresh=False,
+                auto_refresh=True,
             ) as live:
                 with client.responses.stream(**kwargs) as stream:
                     for event in stream:

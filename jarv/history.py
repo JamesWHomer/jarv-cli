@@ -96,9 +96,15 @@ def format_elapsed(since: str | None, now: datetime) -> str:
 
 def get_shell_name() -> str:
     shell = os.environ.get("SHELL")
-    if not shell:
-        shell = "PowerShell" if os.environ.get("PSModulePath") else os.environ.get("ComSpec", "cmd.exe")
-    return shell
+    if shell:
+        return shell
+    if os.name == "nt" and os.environ.get("PSModulePath"):
+        # execute_command() invokes powershell.exe explicitly on Windows.
+        # Be precise here so the model does not assume Bash/cmd/PowerShell 7
+        # syntax such as `&&`. Windows PowerShell 5.1 is the default
+        # powershell.exe on Windows 10.
+        return "Windows PowerShell 5.1 (powershell.exe)"
+    return os.environ.get("ComSpec", "cmd.exe")
 
 
 def short_hash(value: str, length: int = 12) -> str:
