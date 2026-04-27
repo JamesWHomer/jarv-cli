@@ -233,12 +233,12 @@ def run_agent(query: str, config: dict, client: OpenAI) -> None:
             reasoning_items = []
             got_text = False
 
-            with client.responses.stream(**kwargs) as stream:
-                with Live(
-                    Spinner("dots", text=" Thinking..."),
-                    refresh_per_second=15,
-                    console=console,
-                ) as live:
+            with Live(
+                Spinner("dots", text=" Thinking..."),
+                refresh_per_second=15,
+                console=console,
+            ) as live:
+                with client.responses.stream(**kwargs) as stream:
                     for event in stream:
                         if event.type == "response.output_text.delta":
                             if not got_text:
