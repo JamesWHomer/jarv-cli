@@ -261,7 +261,12 @@ def run_agent(query: str, config: dict, client: OpenAI) -> None:
                     cmd = json.loads(item.arguments)["command"]
                     console.print()
                     console.print(Rule(f"[bold yellow]$ {cmd}[/bold yellow]", style="yellow", align="left"))
-                    output = run_command(cmd)
+                    with Live(
+                        Spinner("dots", text=" Running command..."),
+                        refresh_per_second=15,
+                        console=console,
+                    ):
+                        output = run_command(cmd)
                     display_output(output)
                     console.print(Rule(style="bright_black"))
 
