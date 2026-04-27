@@ -37,17 +37,21 @@ GITHUB_REPO = "JamesWHomer/jarv"
 GITHUB_API = f"https://api.github.com/repos/{GITHUB_REPO}/commits/main"
 INSTALL_URL = f"https://github.com/{GITHUB_REPO}.git"
 
+DEFAULT_SYSTEM_PROMPT = (
+    "You are Jarv, a helpful CLI assistant. "
+    "You can run shell commands when needed to answer questions or complete tasks. "
+    "Be concise and direct. "
+    "When the user asks about jarv commands, behavior, config, updating, or usage, "
+    "run `jarv help` before answering. Do not invent unsupported commands."
+)
+
 DEFAULT_CONFIG = {
     "api_key": "",
     "model": "gpt-4o-mini",
     "reasoning_effort": "",
     "max_history": 40,
     "command_timeout": 60,
-    "system_prompt": (
-        "You are Jarv, a helpful CLI assistant. "
-        "You can run shell commands when needed to answer questions or complete tasks. "
-        "Be concise and direct."
-    ),
+    "system_prompt": DEFAULT_SYSTEM_PROMPT,
 }
 
 # Responses API tool format (flat, no "function" wrapper key)
@@ -93,8 +97,15 @@ def load_config() -> dict:
     if not isinstance(config, dict):
         console.print(f"[red]Config must be a JSON object:[/red] {CONFIG_FILE}")
         sys.exit(1)
+    changed = False
     for k, v in DEFAULT_CONFIG.items():
-        config.setdefault(k, v)
+        if k not in config:
+            config[k] = v
+            changed = True
+
+    if changed:
+        save_config(config)
+
     return config
 
 
