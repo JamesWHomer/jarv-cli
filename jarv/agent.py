@@ -171,7 +171,7 @@ def run_agent(
             # while preserving visible "Thinking..." activity.
             with Live(
                 Spinner("dots", text=" Thinking..."),
-                refresh_per_second=2,
+                refresh_per_second=4,
                 console=console,
                 auto_refresh=True,
             ) as live:
