@@ -141,6 +141,7 @@ def dispatch_tool(
     client: OpenAI,
     config: dict,
     on_run_command: Callable[[str], str] | None = None,
+    spawn_observer: "SpawnObserver | None" = None,
 ) -> str:
     """Execute a non-finish tool call and return the model-visible output string.
 
@@ -172,7 +173,7 @@ def dispatch_tool(
         if not isinstance(children, list) or not children:
             return "[tool argument error: children must be a non-empty list]"
         try:
-            results = spawn_batch(node, children, store, client, config)
+            results = spawn_batch(node, children, store, client, config, observer=spawn_observer)
         except DepthExceeded as e:
             return f"[error: {e}]"
         return json.dumps(results)
@@ -185,6 +186,7 @@ def run_subagent_loop(
     store: ArtifactStore,
     client: OpenAI,
     config: dict,
+    spawn_observer: "SpawnObserver | None" = None,
 ) -> tuple[str | None, str]:
     """Run a single subagent to completion.
 
@@ -247,7 +249,10 @@ def run_subagent_loop(
                     else:
                         return longform, tldr
                 else:
-                    output = dispatch_tool(item.name, args, node, store, client, config)
+                    output = dispatch_tool(
+                        item.name, args, node, store, client, config,
+                        spawn_observer=spawn_observer,
+                    )
 
             new_input.append({
                 "type": "function_call",
@@ -265,13 +270,27 @@ def run_subagent_loop(
         kwargs["input"] = kwargs["input"] + new_input
 
 
+class SpawnObserver:
+    """Hook surface for the UI to observe nested spawn activity.
+
+    All methods are called from worker threads; implementations must be
+    thread-safe.
+    """
+
+    def on_spawn_start(self, parent_label: str, child_labels: list[str]) -> None:
+        pass
+
+    def on_child_done(self, parent_label: str, label: str, result: dict) -> None:
+        pass
+
+
 def spawn_batch(
     parent: AgentNode,
     child_specs: list[dict],
     store: ArtifactStore,
     client: OpenAI,
     config: dict,
-    on_child_done: Callable[[str, dict], None] | None = None,
+    observer: "SpawnObserver | None" = None,
 ) -> list[dict]:
     """Spawn N children in parallel, block until all finish, return status reports."""
     new_depth = parent.depth + 1
@@ -305,10 +324,16 @@ def spawn_batch(
             visible_labels=valid_deps,
         ))
 
+    if observer is not None:
+        observer.on_spawn_start(parent.label, [n.label for n in nodes])
+
     pool_size = max(1, int(config.get("subagent_thread_pool_max_workers", 8)))
     raw_results: dict[str, dict] = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=pool_size) as ex:
-        future_to_node = {ex.submit(run_subagent_loop, n, store, client, config): n for n in nodes}
+        future_to_node = {
+            ex.submit(run_subagent_loop, n, store, client, config, observer): n
+            for n in nodes
+        }
         for fut in concurrent.futures.as_completed(future_to_node):
             n = future_to_node[fut]
             try:
@@ -323,7 +348,7 @@ def spawn_batch(
                 else:
                     result = {"label": n.label, "status": "failed", "reason": tldr_or_reason}
             raw_results[n.label] = result
-            if on_child_done is not None:
-                on_child_done(n.label, result)
+            if observer is not None:
+                observer.on_child_done(parent.label, n.label, result)
 
     return [raw_results[spec["label"]] for spec in child_specs if spec.get("label") in raw_results]
