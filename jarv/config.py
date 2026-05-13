@@ -21,7 +21,6 @@ DEFAULT_CONFIG = {
     "reasoning_effort": "",
     "max_history": 40,
     "command_timeout": 60,
-    "history_scope": "global",
     "system_prompt": DEFAULT_SYSTEM_PROMPT,
     "max_subagent_depth": 4,
     "subagent_thread_pool_max_workers": 8,
@@ -83,11 +82,6 @@ def validate_config(config: dict) -> bool:
     effort = config.get("reasoning_effort", "")
     if effort is None:
         config["reasoning_effort"] = ""
-
-    history_scope = config.get("history_scope", DEFAULT_CONFIG["history_scope"])
-    if history_scope not in {"global", "terminal"}:
-        console.print("[red]Config 'history_scope' must be 'global' or 'terminal'.[/red]")
-        ok = False
 
     for key in ("max_history", "command_timeout"):
         try:

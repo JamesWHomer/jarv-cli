@@ -1,6 +1,7 @@
 import json
 import os
 import platform
+import sys
 import threading
 import time
 
@@ -18,7 +19,6 @@ from rich.text import Text
 from .config import DEFAULT_CONFIG
 from .display import console, flatten_headings
 from .history import (
-    SessionContext,
     artifact_file_for,
     get_shell_name,
     history_metadata,
@@ -169,21 +169,6 @@ def get_system_info() -> str:
     return "\n".join(parts)
 
 
-def new_terminal_context_input(context: SessionContext) -> dict | None:
-    if context.scope != "global" or not context.previous_global_session_changed:
-        return None
-    return {
-        "role": "user",
-        "content": "\n".join(
-            [
-                "<new_terminal>",
-                f"Terminal session: {context.session_label}",
-                "</new_terminal>",
-            ]
-        ),
-    }
-
-
 def _dispatch_run_command_with_ui(args: dict, config: dict) -> str:
     cmd = args.get("command")
     if not isinstance(cmd, str) or not cmd.strip():
@@ -309,16 +294,10 @@ def run_agent(
     query: str,
     config: dict,
     client: OpenAI,
-    session_override: tuple[str, str, str] | None = None,
-    independent: bool = False,
     propagate_keyboard_interrupt: bool = False,
 ) -> None:
-    session_context = prepare_session_context(
-        config,
-        independent=independent,
-        session_override=session_override,
-        mark_message=True,
-    )
+    interactive = sys.stdout.isatty()
+    session_context = prepare_session_context(mark_message=True)
     history = load_history(session_context.history_file)
     max_history = config.get("max_history", DEFAULT_CONFIG["max_history"])
     metadata = history_metadata(session_context)
@@ -337,9 +316,6 @@ def run_agent(
     history.append({"role": "user", "content": query, **metadata})
 
     input_items = build_input(history, max_history)
-    terminal_context = new_terminal_context_input(session_context)
-    if terminal_context is not None and input_items:
-        input_items.insert(len(input_items) - 1, terminal_context)
 
     kwargs = dict(
         model=config["model"],
@@ -361,42 +337,46 @@ def run_agent(
             reasoning_items = []
             got_text = False
 
-            # Spinner runs at a low refresh rate to reduce Windows focus
-            # annoyances; once text starts streaming we swap to a faster
-            # Live that progressively renders the Markdown reply.
             thought_started = time.perf_counter()
-            spinner_live = Live(
-                ThinkingIndicator(thought_started),
-                refresh_per_second=4,
-                console=console,
-                auto_refresh=True,
-                transient=True,
-            )
-            spinner_live.start()
+            spinner_live: Live | None = None
             stream_live: Live | None = None
+            if interactive:
+                # Spinner runs at a low refresh rate to reduce Windows focus
+                # annoyances; once text starts streaming we swap to a faster
+                # Live that progressively renders the Markdown reply.
+                spinner_live = Live(
+                    ThinkingIndicator(thought_started),
+                    refresh_per_second=4,
+                    console=console,
+                    auto_refresh=True,
+                    transient=True,
+                )
+                spinner_live.start()
             try:
                 with client.responses.stream(**kwargs) as stream:
                     for event in stream:
                         if event.type == "response.output_text.delta":
                             if not got_text:
                                 got_text = True
-                                spinner_live.stop()
-                                spinner_live = None
-                                thought_elapsed = time.perf_counter() - thought_started
-                                console.print(
-                                    thought_complete_indicator(
-                                        f"Thought for {format_thought_duration(thought_elapsed)}."
+                                if spinner_live is not None:
+                                    spinner_live.stop()
+                                    spinner_live = None
+                                if interactive:
+                                    thought_elapsed = time.perf_counter() - thought_started
+                                    console.print(
+                                        thought_complete_indicator(
+                                            f"Thought for {format_thought_duration(thought_elapsed)}."
+                                        )
                                     )
-                                )
-                                stream_live = Live(
-                                    TailMarkdown("", console.size.height - 2),
-                                    refresh_per_second=12,
-                                    console=console,
-                                    auto_refresh=True,
-                                    transient=True,
-                                    vertical_overflow="crop",
-                                )
-                                stream_live.start()
+                                    stream_live = Live(
+                                        TailMarkdown("", console.size.height - 2),
+                                        refresh_per_second=12,
+                                        console=console,
+                                        auto_refresh=True,
+                                        transient=True,
+                                        vertical_overflow="crop",
+                                    )
+                                    stream_live.start()
                             reply_text += event.delta
                             if stream_live is not None:
                                 stream_live.update(
@@ -416,8 +396,11 @@ def run_agent(
                 if stream_live is not None:
                     stream_live.stop()
             if got_text:
-                console.print(Markdown(flatten_headings(reply_text)))
-            if not got_text:
+                if interactive:
+                    console.print(Markdown(flatten_headings(reply_text)))
+                else:
+                    print(reply_text)
+            if not got_text and interactive:
                 thought_elapsed = time.perf_counter() - thought_started
                 console.print(
                     thought_complete_indicator(

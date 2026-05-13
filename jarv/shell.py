@@ -70,6 +70,8 @@ def execute_command(command: str, timeout: int | float = 60) -> CommandResult:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
             )
         else:
@@ -79,6 +81,8 @@ def execute_command(command: str, timeout: int | float = 60) -> CommandResult:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 preexec_fn=os.setsid,
             )
         try:

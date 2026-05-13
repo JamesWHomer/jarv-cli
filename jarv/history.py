@@ -5,14 +5,13 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .config import CONFIG_DIR, DEFAULT_CONFIG
+from .config import CONFIG_DIR
 from .display import console
 
-HISTORY_FILE = CONFIG_DIR / "history.json"
 SESSIONS_FILE = CONFIG_DIR / "sessions.json"
 
 
-def load_history(path: Path = HISTORY_FILE) -> list:
+def load_history(path: Path) -> list:
     if not path.exists():
         return []
     try:
@@ -27,7 +26,7 @@ def load_history(path: Path = HISTORY_FILE) -> list:
     return []
 
 
-def save_history(history: list, path: Path = HISTORY_FILE) -> None:
+def save_history(history: list, path: Path) -> None:
     CONFIG_DIR.mkdir(exist_ok=True)
     try:
         path.write_text(json.dumps(history, indent=2), encoding="utf-8")
@@ -37,19 +36,19 @@ def save_history(history: list, path: Path = HISTORY_FILE) -> None:
 
 def load_sessions() -> dict:
     if not SESSIONS_FILE.exists():
-        return {"sessions": {}, "last_global_session_id": ""}
+        return {"terminals": {}, "sessions": {}}
     try:
         data = json.loads(SESSIONS_FILE.read_text(encoding="utf-8"))
         if isinstance(data, dict):
+            data.setdefault("terminals", {})
             data.setdefault("sessions", {})
-            data.setdefault("last_global_session_id", "")
-            if isinstance(data["sessions"], dict):
+            if isinstance(data["terminals"], dict) and isinstance(data["sessions"], dict):
                 return data
     except json.JSONDecodeError as e:
         console.print(f"[yellow]Ignoring malformed sessions metadata:[/yellow] {e}")
     except (OSError, UnicodeDecodeError) as e:
         console.print(f"[yellow]Could not read sessions metadata:[/yellow] {e}")
-    return {"sessions": {}, "last_global_session_id": ""}
+    return {"terminals": {}, "sessions": {}}
 
 
 def save_sessions(data: dict) -> None:
@@ -77,32 +76,11 @@ def parse_timestamp(value: str | None) -> datetime | None:
         return None
 
 
-def format_elapsed(since: str | None, now: datetime) -> str:
-    then = parse_timestamp(since)
-    if then is None:
-        return "unknown"
-    seconds = max(0, int((now - then).total_seconds()))
-    if seconds < 60:
-        return f"{seconds} seconds"
-    minutes = seconds // 60
-    if minutes < 60:
-        return f"{minutes} minutes"
-    hours = minutes // 60
-    if hours < 48:
-        return f"{hours} hours"
-    days = hours // 24
-    return f"{days} days"
-
-
 def get_shell_name() -> str:
     shell = os.environ.get("SHELL")
     if shell:
         return shell
     if os.name == "nt" and os.environ.get("PSModulePath"):
-        # execute_command() invokes powershell.exe explicitly on Windows.
-        # Be precise here so the model does not assume Bash/cmd/PowerShell 7
-        # syntax such as `&&`. Windows PowerShell 5.1 is the default
-        # powershell.exe on Windows 10.
         return "Windows PowerShell 5.1 (powershell.exe)"
     return os.environ.get("ComSpec", "cmd.exe")
 
@@ -111,7 +89,8 @@ def short_hash(value: str, length: int = 12) -> str:
     return hashlib.sha256(value.encode("utf-8", errors="replace")).hexdigest()[:length]
 
 
-def detect_terminal_session() -> tuple[str, str, str]:
+def detect_terminal() -> tuple[str, str]:
+    """Return (terminal_id, label) for the current terminal."""
     candidates = [
         ("windows-terminal", os.environ.get("WT_SESSION")),
         ("term-session", os.environ.get("TERM_SESSION_ID")),
@@ -120,20 +99,13 @@ def detect_terminal_session() -> tuple[str, str, str]:
     ]
     for source, value in candidates:
         if value:
-            session_id = f"{source}-{short_hash(value)}"
-            return session_id, f"{source} {session_id[-6:]}", source
+            terminal_id = f"{source}-{short_hash(value)}"
+            return terminal_id, f"{source} {terminal_id[-6:]}"
 
     user = os.environ.get("USERNAME") or os.environ.get("USER") or "unknown-user"
     raw = "|".join([str(os.getppid()), os.getcwd(), user, get_shell_name()])
-    session_id = f"parent-{short_hash(raw)}"
-    return session_id, f"parent process {os.getppid()}", "parent-process"
-
-
-def independent_session() -> tuple[str, str, str]:
-    now = utc_now()
-    raw = f"{now.isoformat()}|{os.getpid()}|{os.getppid()}|{os.getcwd()}"
-    session_id = f"independent-{short_hash(raw)}"
-    return session_id, f"independent {session_id[-6:]}", "independent"
+    terminal_id = f"parent-{short_hash(raw)}"
+    return terminal_id, f"parent process {os.getppid()}"
 
 
 def history_file_for_session(session_id: str) -> Path:
@@ -153,90 +125,43 @@ def last_user_message(history: list) -> dict | None:
 
 @dataclass
 class SessionContext:
-    scope: str
     session_id: str
     session_label: str
-    session_source: str
     history_file: Path
-    is_new_session: bool
-    previous_user_at: str | None
-    previous_user_session_id: str
-    previous_user_session_label: str
-    previous_global_session_changed: bool
     now: datetime
 
-    @property
-    def elapsed_since_previous_user(self) -> str:
-        return format_elapsed(self.previous_user_at, self.now)
 
-
-def prepare_session_context(
-    config: dict,
-    *,
-    independent: bool = False,
-    session_override: tuple[str, str, str] | None = None,
-    mark_message: bool = False,
-) -> SessionContext:
+def prepare_session_context(mark_message: bool = False) -> SessionContext:
+    """Resolve the active session for this terminal, creating it if needed."""
     now = utc_now()
-    if session_override:
-        session_id, session_label, session_source = session_override
-        scope = "independent" if independent else config.get("history_scope", DEFAULT_CONFIG["history_scope"])
-        history_path = history_file_for_session(session_id) if scope != "global" else HISTORY_FILE
-    elif independent:
-        session_id, session_label, session_source = independent_session()
-        scope = "independent"
-        history_path = history_file_for_session(session_id)
-    else:
-        session_id, session_label, session_source = detect_terminal_session()
-        scope = config.get("history_scope", DEFAULT_CONFIG["history_scope"])
-        history_path = HISTORY_FILE if scope == "global" else history_file_for_session(session_id)
+    terminal_id, terminal_label = detect_terminal()
 
-    sessions = load_sessions()
-    last_global_session_id = str(sessions.get("last_global_session_id") or "")
-    session_map = sessions.setdefault("sessions", {})
-    is_new_session = session_id not in session_map
-    meta = session_map.setdefault(
+    sessions_data = load_sessions()
+    terminals = sessions_data["terminals"]
+    sessions = sessions_data["sessions"]
+
+    session_id = terminals.get(terminal_id) or terminal_id
+    terminals[terminal_id] = session_id
+
+    history_path = history_file_for_session(session_id)
+    meta = sessions.setdefault(
         session_id,
         {
-            "label": session_label,
-            "source": session_source,
+            "label": terminal_label,
             "first_seen_at": isoformat_utc(now),
         },
     )
-    meta.update(
-        {
-            "label": session_label,
-            "source": session_source,
-            "last_seen_at": isoformat_utc(now),
-            "history_file": str(history_path),
-        }
-    )
-
-    history = load_history(history_path)
-    previous_user = last_user_message(history)
-    previous_user_at = previous_user.get("created_at") if previous_user else None
-    previous_user_session_id = str(previous_user.get("session_id") or "") if previous_user else ""
-    previous_user_session_label = str(previous_user.get("session_label") or "") if previous_user else ""
-    comparison_session_id = previous_user_session_id or last_global_session_id
-    previous_global_session_changed = scope == "global" and bool(comparison_session_id) and comparison_session_id != session_id
-
-    if scope == "global":
-        sessions["last_global_session_id"] = session_id
+    meta["last_used_at"] = isoformat_utc(now)
+    meta["history_file"] = str(history_path)
     if mark_message:
         meta["last_message_at"] = isoformat_utc(now)
-    save_sessions(sessions)
+
+    save_sessions(sessions_data)
 
     return SessionContext(
-        scope=scope,
         session_id=session_id,
-        session_label=session_label,
-        session_source=session_source,
+        session_label=meta.get("label", terminal_label),
         history_file=history_path,
-        is_new_session=is_new_session,
-        previous_user_at=previous_user_at,
-        previous_user_session_id=previous_user_session_id,
-        previous_user_session_label=previous_user_session_label,
-        previous_global_session_changed=previous_global_session_changed,
         now=now,
     )
 
@@ -247,3 +172,20 @@ def history_metadata(context: SessionContext) -> dict:
         "session_id": context.session_id,
         "session_label": context.session_label,
     }
+
+
+def set_terminal_session(session_id: str) -> None:
+    terminal_id, _ = detect_terminal()
+    data = load_sessions()
+    data["terminals"][terminal_id] = session_id
+    save_sessions(data)
+
+
+def forget_current_session() -> None:
+    """Remove the current terminal's mapping and its session metadata entry."""
+    terminal_id, _ = detect_terminal()
+    data = load_sessions()
+    session_id = data["terminals"].pop(terminal_id, None)
+    if session_id:
+        data["sessions"].pop(session_id, None)
+    save_sessions(data)

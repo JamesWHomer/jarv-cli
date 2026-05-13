@@ -10,7 +10,6 @@ jarv whats the meaning of life?
 jarv what did the fox say?
 jarv bring up the man page for the uhhh exponent function?
 jarv commit all these files
-jarv session
 ```
 
 ## Heads-Up Mode
@@ -25,9 +24,8 @@ In heads-up mode:
 
 - Type a prompt and press Enter to send it.
 - Keep sending prompts without rerunning `jarv`.
-- Type `exit` or `quit`, or press Ctrl+C, to leave.
-
-Use `jarv session` when you want heads-up mode with a fresh, independent history for that terminal run.
+- Commands start with `/` (e.g. `/clear`, `/history`). Type `/help` to see all commands.
+- Type `exit`, `quit`, or `/exit`, or press Ctrl+C, to leave.
 
 ## Install
 
@@ -45,7 +43,7 @@ pip install git+https://github.com/JamesWHomer/jarv.git
 Then add your OpenAI API key:
 
 ```bash
-jarv set api_key YOUR_OPENAI_API_KEY
+jarv /set api_key YOUR_OPENAI_API_KEY
 ```
 
 Alternatively, clone the repo and install it locally first:
@@ -54,13 +52,13 @@ Alternatively, clone the repo and install it locally first:
 git clone https://github.com/JamesWHomer/jarv.git
 cd jarv
 pip install -e .
-jarv set api_key YOUR_OPENAI_API_KEY
+jarv /set api_key YOUR_OPENAI_API_KEY
 ```
 
 You can verify the install with:
 
 ```bash
-jarv help
+jarv /help
 ```
 
 The first run that needs config will create `~/.jarv/config.json` (on Windows, `%USERPROFILE%\.jarv\config.json`). You can also set the `OPENAI_API_KEY` environment variable instead of saving the key in Jarv config.
@@ -68,7 +66,7 @@ The first run that needs config will create `~/.jarv/config.json` (on Windows, `
 To upgrade later:
 
 ```bash
-jarv update
+jarv /update
 ```
 
 or:
@@ -107,7 +105,7 @@ Config notes:
 - `subagent_thread_pool_max_workers` is the maximum number of subagents that can run in parallel within a single `spawn` call. Defaults to 8.
 - `system_prompt` is sent to the model along with basic system info like OS, current working directory, shell, and session context.
 
-You can edit the JSON file directly or use `jarv set` / `jarv unset`.
+You can edit the JSON file directly or use `jarv /set` / `jarv /unset`.
 
 ## Commands
 
@@ -115,15 +113,16 @@ You can edit the JSON file directly or use `jarv set` / `jarv unset`.
 | --- | --- |
 | `jarv` | Start heads-up mode: an interactive prompt loop for repeated prompts |
 | `jarv <anything>` | Ask Jarv a question or give it a task |
-| `jarv session` | Start heads-up mode with fresh independent history for this terminal run |
-| `jarv set <key> <value>` | Set a config value |
-| `jarv unset <key>` | Reset a config key to its default |
-| `jarv clear` | Clear conversation history |
-| `jarv history` | Show recent conversation history |
-| `jarv config` | Show current settings |
-| `jarv update` | Update Jarv to the latest version from GitHub |
-| `jarv about` | Show detailed information about Jarv |
-| `jarv help` | Show help |
+| `jarv /set <key> <value>` | Set a config value |
+| `jarv /unset <key>` | Reset a config key to its default |
+| `jarv /clear` | Archive this terminal's session and start a fresh one |
+| `jarv /load` | Load the most recently used session into this terminal |
+| `jarv /load <id>` | Load a specific session into this terminal |
+| `jarv /history` | Show recent conversation history |
+| `jarv /config` | Show current settings |
+| `jarv /update` | Update Jarv to the latest version from GitHub |
+| `jarv /about` | Show detailed information about Jarv |
+| `jarv /help` | Show help (`jarv help` also works) |
 
 ## Files
 
@@ -141,7 +140,7 @@ By default, Jarv uses global history, so all terminals share `~/.jarv/history.js
 
 Set `history_scope` to `terminal` to keep normal Jarv history per detected terminal. Jarv detects terminals from environment values such as `WT_SESSION`, `TERM_SESSION_ID`, `TMUX`, or `STY`, with a parent-process fallback.
 
-`jarv session` always starts an independent heads-up session with its own history file, regardless of `history_scope`.
+Use `jarv /clear` to archive the current session and start fresh, or `jarv /load` to switch to a different session.
 
 ## Subagent orchestration
 

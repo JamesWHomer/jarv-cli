@@ -11,7 +11,18 @@ from rich import box
 from . import __version__
 from .config import CONFIG_DIR, CONFIG_FILE, DEFAULT_CONFIG, load_config, save_config, validate_config
 from .display import console, flatten_headings
-from .history import HISTORY_FILE, SESSIONS_FILE, prepare_session_context, load_history, save_history
+from .history import (
+    SESSIONS_FILE,
+    artifact_file_for,
+    forget_current_session,
+    load_history,
+    load_sessions,
+    prepare_session_context,
+    set_terminal_session,
+    utc_now,
+)
+
+ARCHIVE_DIR = CONFIG_DIR / "archive"
 
 GITHUB_REPO = "JamesWHomer/jarv"
 GITHUB_API = f"https://api.github.com/repos/{GITHUB_REPO}/commits/main"
@@ -37,7 +48,7 @@ def coerce_value(value: str):
 
 def cmd_set(args: list) -> None:
     if len(args) < 2:
-        console.print("[red]Usage:[/red] jarv set <key> <value>")
+        console.print("[red]Usage:[/red] jarv /set <key> <value>")
         console.print(f"[dim]Keys: {', '.join(DEFAULT_CONFIG.keys())}[/dim]")
         return
     key, raw = args[0], " ".join(args[1:])
@@ -51,7 +62,7 @@ def cmd_set(args: list) -> None:
 
 def cmd_unset(args: list) -> None:
     if not args:
-        console.print("[red]Usage:[/red] jarv unset <key>")
+        console.print("[red]Usage:[/red] jarv /unset <key>")
         return
     key = args[0]
     config = load_config()
@@ -74,15 +85,16 @@ def print_help() -> None:
     cmd_table.add_column(style="dim")
     cmd_table.add_row("jarv", "Start heads-up mode for repeated prompts")
     cmd_table.add_row("jarv <question>", "Ask jarv anything")
-    cmd_table.add_row("jarv session", "Start an independent heads-up session with separate history")
-    cmd_table.add_row("jarv set <key> <value>", "Set a config value")
-    cmd_table.add_row("jarv unset <key>", "Reset a config key to its default")
-    cmd_table.add_row("jarv clear", "Clear conversation history")
-    cmd_table.add_row("jarv history", "Show recent conversation history")
-    cmd_table.add_row("jarv config", "Show current settings")
-    cmd_table.add_row("jarv update", "Update jarv to the latest version")
-    cmd_table.add_row("jarv about", "Show detailed information about jarv")
-    cmd_table.add_row("jarv help", "Show this help")
+    cmd_table.add_row("jarv /set <key> <value>", "Set a config value")
+    cmd_table.add_row("jarv /unset <key>", "Reset a config key to its default")
+    cmd_table.add_row("jarv /clear", "Archive this terminal's session and start a fresh one")
+    cmd_table.add_row("jarv /load", "Load the most recently used session into this terminal")
+    cmd_table.add_row("jarv /load <id>", "Load a specific session into this terminal")
+    cmd_table.add_row("jarv /history", "Show recent conversation history")
+    cmd_table.add_row("jarv /config", "Show current settings")
+    cmd_table.add_row("jarv /update", "Update jarv to the latest version")
+    cmd_table.add_row("jarv /about", "Show detailed information about jarv")
+    cmd_table.add_row("jarv /help", "Show this help")
 
     key_table = Table(box=None, show_header=False, padding=(0, 2), pad_edge=False)
     key_table.add_column(style="bold yellow", no_wrap=True)
@@ -92,7 +104,6 @@ def print_help() -> None:
     key_table.add_row("reasoning_effort", "Reasoning effort value (empty to disable)")
     key_table.add_row("max_history", "Number of messages to keep as context")
     key_table.add_row("command_timeout", "Seconds before a shell command is killed")
-    key_table.add_row("history_scope", "History mode: global or terminal")
     key_table.add_row("system_prompt", "System prompt sent to the model")
     key_table.add_row("check_updates", "Check for updates on each run (true/false)")
 
@@ -100,8 +111,7 @@ def print_help() -> None:
     console.print()
     console.print("[bold]Config keys[/bold]")
     console.print(key_table)
-    console.print(f"\n[dim]Config:  {CONFIG_FILE}[/dim]")
-    console.print(f"[dim]History: {HISTORY_FILE}[/dim]")
+    console.print(f"\n[dim]Config:   {CONFIG_FILE}[/dim]")
     console.print(f"[dim]Sessions: {SESSIONS_FILE}[/dim]")
 
 
@@ -114,28 +124,27 @@ jarv is a command-line AI assistant powered by OpenAI.
 
 - `jarv` - Start heads-up mode so you can keep sending prompts without rerunning the command.
 - `jarv <question>` - Ask jarv anything. Your words after `jarv` are sent as the user message.
-- `jarv session` - Start heads-up mode with an independent history for this terminal run.
-- `jarv help` - Show the short command overview.
-- `jarv about` - Show this detailed overview.
-- `jarv config` - Show current settings. The API key is masked.
-- `jarv set <key> <value>` - Set a config value. Values like `true`, `false`, integers, and floats are coerced.
-- `jarv unset <key>` - Reset a default config key, or remove a custom key.
-- `jarv history` - Show recent user and assistant messages.
-- `jarv clear` - Clear saved conversation history.
-- `jarv update` - Check GitHub for the latest main commit and install it with pip.
+- `jarv /help` - Show the short command overview. (`jarv help` also works as a permanent alias.)
+- `jarv /about` - Show this detailed overview.
+- `jarv /config` - Show current settings. The API key is masked.
+- `jarv /set <key> <value>` - Set a config value. Values like `true`, `false`, integers, and floats are coerced.
+- `jarv /unset <key>` - Reset a default config key, or remove a custom key.
+- `jarv /history` - Show recent user and assistant messages.
+- `jarv /clear` - Archive this terminal's session and start a fresh one on the next message.
+- `jarv /load` - Bind this terminal to the most recently used session.
+- `jarv /load <id>` - Bind this terminal to a specific session id.
+- `jarv /update` - Check GitHub for the latest main commit and install it with pip.
 
 ## Heads-up mode
 
-Run `jarv` with no prompt to start an interactive session. Type a prompt and press Enter to send it. Type `exit` or `quit`, or press Ctrl+C, to leave.
-
-Run `jarv session` to start an independent interactive session. It uses a separate history file and does not change your configured default history mode.
+Run `jarv` with no prompt to start an interactive session. Type a prompt and press Enter to send it. Commands start with `/` (e.g. `/clear`, `/history`). Type `exit`, `quit`, or `/exit`, or press Ctrl+C, to leave.
 
 ## How jarv works
 
 1. Loads config from `{CONFIG_FILE}`.
-2. Detects the current terminal/session and chooses the configured history scope.
-3. Loads recent conversation history from the active history file.
-4. Sends your query, recent history, the configured system prompt, and system info to the OpenAI Responses API. If global history moved to a different terminal, jarv inserts a small `<new_terminal>` marker before the new message.
+2. Detects the current terminal and resolves its active session (default: one session per terminal).
+3. Loads recent conversation history from that session's history file.
+4. Sends your query, recent history, the configured system prompt, and system info to the OpenAI Responses API.
 5. Streams the assistant response in the terminal.
 6. If the model calls the shell tool, jarv displays the command, runs it, shows stdout/stderr/exit status, and sends the full command result back to the model.
 7. Saves the final assistant response back to history, trimmed to `max_history` items.
@@ -161,36 +170,33 @@ Keys:
 - `reasoning_effort` - Optional reasoning effort value. Empty disables this setting.
 - `max_history` - Number of history items kept as context. Default: `{DEFAULT_CONFIG['max_history']}`.
 - `command_timeout` - Seconds before a shell command is killed. Default: `{DEFAULT_CONFIG['command_timeout']}`.
-- `history_scope` - History mode. Use `global` for shared history or `terminal` for one history per detected terminal. Default: `{DEFAULT_CONFIG['history_scope']}`.
 - `system_prompt` - Instructions sent to the model before each request.
 - `check_updates` - Whether to check for updates on each run. Default: `true`. Set to `false` to skip the background update check and avoid the ~200 ms network wait.
 
 If the config file does not exist, jarv creates it and exits so you can add an API key.
 If the config file is invalid JSON, jarv backs it up and creates a fresh default config.
 
-## History and context
+## History and sessions
 
-Global history file: `{HISTORY_FILE}`
 Session metadata file: `{SESSIONS_FILE}`
 
-jarv stores recent conversation items locally, including user messages, assistant messages, and tool-call context needed by the Responses API. `jarv clear` empties the active history file. `jarv history` displays only readable user and assistant messages from the active history.
+Each terminal is bound to exactly one session at a time. By default a fresh terminal gets its own session (id derived from terminal fingerprint). History for a session lives in `history-<hash>.json` under `{CONFIG_DIR}`.
 
-When `history_scope` is `global`, all terminals share `{HISTORY_FILE}`. jarv still tells the model when a message appears to come from a new or different terminal, and how much time has passed since the previous user message.
-
-When `history_scope` is `terminal`, jarv stores history in `history-<session-id>.json` files under `{CONFIG_DIR}`. `jarv session` always uses an independent `history-<session-id>.json` file for that interactive run, regardless of `history_scope`.
+- `jarv /clear` archives the current session's history+artifacts and removes the terminal's mapping. The next prompt starts a fresh session.
+- `jarv /load` looks up the most recently used session anywhere and binds it to this terminal.
+- `jarv /load <id>` binds a specific session id to this terminal.
 
 ## Updates
 
-- `jarv update` checks `{GITHUB_REPO}` on GitHub and installs the latest version from `{INSTALL_URL}`.
+- `jarv /update` checks `{GITHUB_REPO}` on GitHub and installs the latest version from `{INSTALL_URL}`.
 - Normal question runs also do a quick background update check and tell you if an update is available.
-- Set `check_updates` to `false` (`jarv set check_updates false`) to disable the background check and remove the ~200 ms latency it adds.
+- Set `check_updates` to `false` (`jarv /set check_updates false`) to disable the background check and remove the ~200 ms latency it adds.
 - After updating, run `jarv` again to use the new version.
 
 ## Files
 
 - Config directory: `{CONFIG_DIR}`
 - Config file: `{CONFIG_FILE}`
-- History file: `{HISTORY_FILE}`
 - Session metadata file: `{SESSIONS_FILE}`
 - Last known update SHA: `{SHA_FILE}`
 
@@ -265,19 +271,58 @@ def cmd_update() -> None:
 
 
 def cmd_clear() -> None:
-    config = load_config()
-    if not validate_config(config):
-        sys.exit(1)
-    session_context = prepare_session_context(config)
-    save_history([], session_context.history_file)
-    console.print("[dim]History cleared.[/dim]")
+    session_context = prepare_session_context()
+    history_path = session_context.history_file
+
+    archived_any = False
+    if history_path.exists() and load_history(history_path):
+        ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
+        cleared_at = utc_now().strftime("%Y%m%dT%H%M%SZ")
+        stem_suffix = history_path.stem[len("history"):]
+        archived_history = ARCHIVE_DIR / f"history-{cleared_at}{stem_suffix}.json"
+        history_path.rename(archived_history)
+
+        artifact_path = artifact_file_for(history_path)
+        if artifact_path.exists():
+            archived_artifacts = ARCHIVE_DIR / f"artifacts-{cleared_at}{stem_suffix}.json"
+            artifact_path.rename(archived_artifacts)
+
+        console.print(f"[dim]Session archived to[/dim] {archived_history}")
+        archived_any = True
+    else:
+        console.print("[dim]No history to archive.[/dim]")
+
+    forget_current_session()
+    if archived_any:
+        console.print("[green]Fresh session will start on the next message.[/green]")
+
+
+def cmd_load(args: list) -> None:
+    data = load_sessions()
+    sessions = data["sessions"]
+    if not sessions:
+        console.print("[yellow]No sessions exist yet.[/yellow]")
+        return
+
+    if args:
+        session_id = args[0]
+        if session_id not in sessions:
+            console.print(f"[red]Unknown session id:[/red] {session_id}")
+            console.print("[dim]Run `jarv` with no args after binding, or pick from existing ids.[/dim]")
+            return
+    else:
+        session_id = max(
+            sessions.keys(),
+            key=lambda sid: sessions[sid].get("last_used_at", ""),
+        )
+
+    set_terminal_session(session_id)
+    label = sessions[session_id].get("label", session_id)
+    console.print(f"[green]This terminal is now bound to session[/green] [bold cyan]{session_id}[/bold cyan] [dim]({label})[/dim]")
 
 
 def cmd_history() -> None:
-    config = load_config()
-    if not validate_config(config):
-        sys.exit(1)
-    session_context = prepare_session_context(config)
+    session_context = prepare_session_context()
     history = load_history(session_context.history_file)
     if not history:
         console.print("[dim]No history yet.[/dim]")
