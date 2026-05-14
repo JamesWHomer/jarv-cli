@@ -156,7 +156,7 @@ def print_help() -> None:
     cmd_table.add_row("jarv /set <key> <value>", "Set a config value")
     cmd_table.add_row("jarv /unset <key>", "Reset a config key to its default")
     cmd_table.add_row("jarv /clear", "Archive this terminal's session and start a fresh one")
-    cmd_table.add_row("jarv /sessions", "List the 5 most recently active sessions")
+    cmd_table.add_row("jarv /sessions", "List sessions (all in a TTY; 5 most recent when piped/non-TTY)")
     cmd_table.add_row("jarv /load", "Load the most recently used session into this terminal")
     cmd_table.add_row("jarv /load <id>", "Load a specific session into this terminal")
     cmd_table.add_row("jarv /history", "Show recent conversation history")
@@ -176,14 +176,17 @@ def print_help() -> None:
     key_table.add_row("max_history", "Number of messages to keep as context")
     key_table.add_row("command_timeout", "Seconds before a shell command is killed")
     key_table.add_row("system_prompt", "System prompt sent to the model")
-    key_table.add_row("check_updates", "Check for updates on each run (true/false)")
+    key_table.add_row("max_subagent_depth", "Max spawn depth for nested subagents")
+    key_table.add_row("subagent_thread_pool_max_workers", "Parallel subagents per spawn call")
+    key_table.add_row("check_updates", "Background update check on one-shot runs (true/false)")
 
     console.print(Panel(cmd_table, title="[bold]jarv[/bold]", border_style="bright_black", padding=(1, 2)))
     console.print()
     console.print("[bold]Config keys[/bold]")
     console.print(key_table)
-    console.print(f"\n[dim]Config:   {CONFIG_FILE}[/dim]")
-    console.print(f"[dim]Sessions: {SESSIONS_FILE}[/dim]")
+    console.print(f"\n[dim]Config:         {CONFIG_FILE}[/dim]")
+    console.print(f"[dim]Sessions index: {SESSIONS_FILE}[/dim]")
+    console.print(f"[dim]Session data:    {SESSIONS_DIR}[/dim]")
 
 
 def print_about() -> None:
@@ -204,7 +207,7 @@ jarv is a command-line AI assistant powered by OpenAI.
 - `jarv /undo [n]` - Unsend the last n exchanges (default 1). The removed exchange is pushed onto a redo stack.
 - `jarv /redo [n]` - Restore the last n undone exchanges (default 1). Sending a new message clears the redo stack.
 - `jarv /clear` - Archive this terminal's session and start a fresh one on the next message.
-- `jarv /sessions` - List the 5 most recently active sessions.
+- `jarv /sessions` - List sessions by recency. In an interactive terminal you can scroll through all of them; when stdout is not a TTY (e.g. piped), only the 5 most recent are listed.
 - `jarv /load` - Bind this terminal to the most recently used session.
 - `jarv /load <id>` - Bind this terminal to a specific session id.
 - `jarv /update` - Check GitHub for the latest main commit and install it with pip.
@@ -220,15 +223,16 @@ Run `jarv` with no prompt to start an interactive session. Type a prompt and pre
 3. Loads recent conversation history from that session's history file.
 4. Sends your query, recent history, the configured system prompt, and system info to the OpenAI Responses API.
 5. Streams the assistant response in the terminal.
-6. If the model calls the shell tool, jarv displays the command, runs it, shows stdout/stderr/exit status, and sends the full command result back to the model.
+6. When the model issues tool calls, jarv runs the matching handler and feeds results back into the model (for `run_command`, that means showing the command, running it, printing stdout/stderr/exit status, and returning the full output).
 7. Saves the final assistant response back to history, trimmed to `max_history` items.
 
-## Shell command behavior
+## Tools and shell commands
 
-- jarv exposes three tools to the model: `run_command`, `spawn`, and `read_artifact`.
-- Commands are run only when the model chooses to call that tool.
-- On Windows, commands run through PowerShell.
-- On other platforms, commands run through the system shell.
+- The root model sees three tools: `run_command`, `spawn`, and `read_artifact`.
+- Spawned subagents also get a mandatory `finish` tool (to return output) and may get `spawn` when the parent sets `sterile: false`.
+- Shell commands run only when the model calls `run_command`.
+- On Windows, `run_command` uses PowerShell.
+- On other platforms, `run_command` uses the system shell.
 - Command output shown in the terminal is shortened after 30 lines, but the full output is sent back to the model.
 - Commands are killed after `command_timeout` seconds.
 - Interrupted commands/process trees are terminated when possible.
@@ -245,7 +249,9 @@ Keys:
 - `max_history` - Number of history items kept as context. Default: `{DEFAULT_CONFIG['max_history']}`.
 - `command_timeout` - Seconds before a shell command is killed. Default: `{DEFAULT_CONFIG['command_timeout']}`.
 - `system_prompt` - Instructions sent to the model before each request.
-- `check_updates` - Whether to check for updates on each run. Default: `true`. Set to `false` to skip the background update check and avoid the ~200 ms network wait.
+- `max_subagent_depth` - Maximum recursion depth for `spawn` (root is 0). Default: `{DEFAULT_CONFIG['max_subagent_depth']}`.
+- `subagent_thread_pool_max_workers` - Max parallel children in one `spawn` batch. Default: `{DEFAULT_CONFIG['subagent_thread_pool_max_workers']}`.
+- `check_updates` - When `true`, a one-shot `jarv <question>` run performs a quick background GitHub check (~200 ms). Default: `true`. Set to `false` to skip that check. Heads-up mode (`jarv` with no args) and slash commands do not run this check.
 
 If the config file does not exist, jarv creates it and exits so you can add an API key.
 If the config file is invalid JSON, jarv backs it up and creates a fresh default config.
@@ -254,18 +260,18 @@ If the config file is invalid JSON, jarv backs it up and creates a fresh default
 
 Session metadata file: `{SESSIONS_FILE}`
 
-Each terminal is bound to exactly one session at a time. By default a fresh terminal gets its own session (id derived from terminal fingerprint). History for a session lives in `history-<hash>.json` under `{CONFIG_DIR}`.
+Each terminal is bound to exactly one session at a time. By default a fresh terminal gets its own session (id derived from terminal fingerprint). Per-session history and artifact sidecars live in `{SESSIONS_DIR}` as `history-<hash>.json` and `artifacts-<hash>.json`.
 
 - `jarv /clear` archives the current session's history+artifacts and removes the terminal's mapping. The next prompt starts a fresh session.
-- `jarv /sessions` lists the 5 most recently active sessions.
+- `jarv /sessions` lists sessions by recency (all in a TTY; 5 most recent when stdout is not a TTY).
 - `jarv /load` looks up the most recently used session anywhere and binds it to this terminal.
 - `jarv /load <id>` binds a specific session id to this terminal.
 
 ## Updates
 
 - `jarv /update` checks `{GITHUB_REPO}` on GitHub and installs the latest version from `{INSTALL_URL}`.
-- Normal question runs also do a quick background update check and tell you if an update is available.
-- Set `check_updates` to `false` (`jarv /set check_updates false`) to disable the background check and remove the ~200 ms latency it adds.
+- A one-shot `jarv <question>` (arguments on the command line, not heads-up mode) can also do a quick background update check when `check_updates` is true, and prints a hint if an update is available.
+- Set `check_updates` to `false` (`jarv /set check_updates false`) to disable that background check and remove the ~200 ms latency it adds.
 - After updating, run `jarv` again to use the new version.
 
 ## Files
@@ -273,6 +279,7 @@ Each terminal is bound to exactly one session at a time. By default a fresh term
 - Config directory: `{CONFIG_DIR}`
 - Config file: `{CONFIG_FILE}`
 - Session metadata file: `{SESSIONS_FILE}`
+- Session history and artifacts: `{SESSIONS_DIR}`
 - Last known update SHA: `{SHA_FILE}`
 
 ## Version
