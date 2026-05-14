@@ -10,6 +10,12 @@ from .history import isoformat_utc, utc_now
 _BREAKDOWN_KEYS = ("system", "tools", "history", "tool_io", "reasoning")
 
 
+def _estimated_token_count(text: str) -> int:
+    if not text:
+        return 0
+    return max(1, len(text) // 4)
+
+
 def _litellm_token_count(model: str, text: str) -> int:
     if not text:
         return 0
@@ -17,7 +23,7 @@ def _litellm_token_count(model: str, text: str) -> int:
         from litellm import token_counter
         return max(0, int(token_counter(model=model, text=text)))
     except Exception:
-        return max(1, len(text) // 4)
+        return _estimated_token_count(text)
 
 
 def _item_text(item: dict) -> str:
@@ -41,15 +47,20 @@ def estimate_context_breakdown(
     instructions: str,
     tools: list,
     input_items: list,
+    *,
+    precise: bool = False,
 ) -> dict:
     """Estimate token counts split by context category.
 
     Returns a dict with keys: system, tools, history, tool_io, reasoning.
-    Uses LiteLLM's token_counter; falls back to a character-based heuristic.
+    Uses a cheap character-based heuristic by default so request startup is not
+    blocked by importing/running LiteLLM tokenization. Set precise=True for
+    LiteLLM's token_counter, falling back to the same heuristic.
     """
+    count_tokens = _litellm_token_count if precise else (lambda _model, text: _estimated_token_count(text))
     try:
-        system_tokens = _litellm_token_count(model, instructions)
-        tools_tokens = _litellm_token_count(model, json.dumps(tools))
+        system_tokens = count_tokens(model, instructions)
+        tools_tokens = count_tokens(model, json.dumps(tools))
 
         history_tokens = 0
         tool_io_tokens = 0
@@ -60,7 +71,7 @@ def estimate_context_breakdown(
                 continue
             role = item.get("role")
             typ = item.get("type")
-            count = _litellm_token_count(model, _item_text(item))
+            count = count_tokens(model, _item_text(item))
             if role in ("user", "assistant"):
                 history_tokens += count
             elif typ in ("function_call", "function_call_output"):
