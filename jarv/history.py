@@ -162,6 +162,7 @@ def prepare_session_context(mark_message: bool = False) -> SessionContext:
     terminals[terminal_id] = session_id
 
     history_path = history_file_for_session(session_id)
+    session_existed = session_id in sessions
     meta = sessions.setdefault(
         session_id,
         {
@@ -174,7 +175,8 @@ def prepare_session_context(mark_message: bool = False) -> SessionContext:
     if mark_message:
         meta["last_message_at"] = isoformat_utc(now)
 
-    save_sessions(sessions_data)
+    if mark_message or session_existed:
+        save_sessions(sessions_data)
 
     return SessionContext(
         session_id=session_id,
