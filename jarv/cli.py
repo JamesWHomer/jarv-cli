@@ -103,6 +103,7 @@ def main() -> None:
         sys.exit(1)
 
     if config.get("check_updates", True):
+        from .commands import _check_update_background, maybe_print_update_available
         maybe_print_update_available()
         threading.Thread(target=_check_update_background, daemon=True).start()
 
