@@ -71,7 +71,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("-e", "--effort", metavar="EFFORT", help="Override reasoning effort (low/medium/high)")
     parser.add_argument("--timeout", type=int, metavar="SECONDS", help="Override command timeout in seconds")
     parser.add_argument("-s", "--system", metavar="PROMPT", help="Override system prompt for this run")
-    parser.add_argument("--no-history", action="store_true", help="Don't load or save session history")
+    parser.add_argument("--new", action="store_true", help="Start a fresh session (ignore prior history, but still save)")
+    parser.add_argument("--incognito", action="store_true", help="Don't load or save session history")
     parser.add_argument("--version", action="version", version=f"jarv {__version__}")
     return parser
 
@@ -134,7 +135,7 @@ def main() -> None:
     from .agent import run_agent
     query = " ".join(query_parts)
     try:
-        run_agent(query, config, client, no_history=args.no_history)
+        run_agent(query, config, client, new_session=args.new, incognito=args.incognito)
     except KeyboardInterrupt:
         console.print("\n[dim]Interrupted.[/dim]")
         sys.exit(130)
