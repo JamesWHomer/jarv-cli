@@ -2,23 +2,6 @@ import os
 import sys
 import threading
 
-from .commands import (
-    _check_update_background,
-    cmd_clear,
-    cmd_config,
-    cmd_history,
-    cmd_load,
-    cmd_redo,
-    cmd_sessions,
-    cmd_set,
-    cmd_undo,
-    cmd_unset,
-    cmd_update,
-    cmd_usage,
-    maybe_print_update_available,
-    print_about,
-    print_help,
-)
 from .config import CONFIG_FILE, load_config, validate_config
 from .display import console
 
@@ -28,6 +11,22 @@ SLASH_COMMANDS = {"/help", "/about", "/update", "/clear", "/load", "/session", "
 
 def _run_slash_command(command: str, rest: list[str]) -> bool:
     """Run a slash command. Returns True if handled, False if unknown."""
+    from .commands import (
+        _check_update_background,
+        cmd_clear,
+        cmd_config,
+        cmd_history,
+        cmd_load,
+        cmd_redo,
+        cmd_sessions,
+        cmd_set,
+        cmd_undo,
+        cmd_unset,
+        cmd_update,
+        cmd_usage,
+        print_about,
+        print_help,
+    )
     if command == "/help":
         print_help()
     elif command == "/about":
@@ -83,6 +82,7 @@ def main() -> None:
 
     # "jarv help" is a permanent alias regardless of slash convention
     if command == "help":
+        from .commands import print_help
         print_help()
         return
 
