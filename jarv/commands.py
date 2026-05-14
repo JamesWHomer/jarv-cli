@@ -1566,30 +1566,156 @@ def cmd_history() -> None:
         return
 
     exchanges = sum(1 for m in history if isinstance(m, dict) and m.get("role") == "user")
-    parts: list = [
-        section_rule("conversation"),
-        Text(""),
-    ]
-    for m in history:
-        role = m.get("role")
-        if role == "user":
-            line = Text()
-            line.append("▌ ", style="bold cyan")
-            line.append("You", style="bold cyan")
-            parts.append(line)
-            parts.append(Text(f"  {m.get('content', '')}"))
-            parts.append(Text(""))
-        elif role == "assistant":
-            content = m.get("content", "")
-            if content:
-                line = Text()
-                line.append("▌ ", style="bold green")
-                line.append("Jarv", style="bold green")
-                parts.append(line)
-                parts.append(Markdown(flatten_headings(content)))
-                parts.append(Text(""))
 
-    console.print(jarv_panel(Group(*parts), title="history", subtitle=f"{exchanges} exchange(s)"))
+    if not sys.stdin.isatty() or not console.is_terminal:
+        parts: list = [section_rule("conversation"), Text("")]
+        for m in history:
+            role = m.get("role")
+            if role == "user":
+                line = Text()
+                line.append("▌ ", style="bold cyan")
+                line.append("You", style="bold cyan")
+                parts.append(line)
+                parts.append(Text(f"  {m.get('content', '')}"))
+                parts.append(Text(""))
+            elif role == "assistant":
+                content = m.get("content", "")
+                if content:
+                    line = Text()
+                    line.append("▌ ", style="bold green")
+                    line.append("Jarv", style="bold green")
+                    parts.append(line)
+                    parts.append(Markdown(flatten_headings(content)))
+                    parts.append(Text(""))
+        console.print(jarv_panel(Group(*parts), title="history", subtitle=f"{exchanges} exchange(s)"))
+        return
+
+    def _content_to_str(content) -> str:
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            chunks: list[str] = []
+            for c in content:
+                if isinstance(c, dict):
+                    if c.get("type") == "text" and isinstance(c.get("text"), str):
+                        chunks.append(c["text"])
+                    elif "content" in c and isinstance(c["content"], str):
+                        chunks.append(c["content"])
+                    else:
+                        chunks.append(f"[{c.get('type', 'item')}]")
+                else:
+                    chunks.append(str(c))
+            return "\n".join(chunks)
+        return str(content)
+
+    lines: list[Text] = []
+    for item in history:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role", "")).lower()
+        if role == "system":
+            continue
+        body = _content_to_str(item.get("content", "")).strip()
+        if not body:
+            continue
+        if role == "user":
+            label, label_style, body_style = "user", "bold cyan", "bold"
+        elif role == "assistant":
+            label, label_style, body_style = "jarv", "bold green", ""
+        else:
+            label, label_style, body_style = role or "?", "dim", "dim"
+        for j, raw in enumerate(body.splitlines() or [""]):
+            t = Text(no_wrap=False, overflow="fold")
+            if j == 0:
+                t.append(f"{label}: ", style=label_style)
+            else:
+                t.append("  ")
+            t.append(raw, style=body_style)
+            lines.append(t)
+        lines.append(Text(""))
+    if lines and lines[-1].plain == "":
+        lines.pop()
+
+    offset = 0
+
+    def _body_rows() -> int:
+        term_h = console.size.height
+        return max(1, term_h - 2 - 1 - 2)  # panel border + header + footer
+
+    def _render() -> Panel:
+        nonlocal offset
+        term_w = console.size.width
+        panel_width = max(1, term_w)
+        show_footer = console.size.height >= 6
+        body = _body_rows()
+        total = len(lines)
+        max_off = max(0, total - body)
+        offset = max(0, min(offset, max_off))
+        start = offset
+        end = min(total, start + body)
+
+        parts: list = []
+        for i in range(start, end):
+            parts.append(lines[i])
+        if not lines:
+            parts.append(Text("  (empty)", style="dim"))
+
+        if show_footer:
+            position = f"{start + 1}–{end} of {total}" if total else "0"
+            parts.append(Text(""))
+            parts.append(
+                Text(
+                    f"↑↓ scroll   PgUp/PgDn   Home/End   q exit   ·   {position}",
+                    style="dim italic",
+                    no_wrap=True,
+                    overflow="crop",
+                )
+            )
+
+        return Panel(
+            Group(*parts),
+            title="[bold bright_white]jarv ▸ history[/bold bright_white]",
+            title_align="left",
+            subtitle=f"[dim]{exchanges} exchange(s)[/dim]",
+            subtitle_align="right",
+            border_style="cyan",
+            box=box.ROUNDED,
+            padding=(0, 1),
+            width=panel_width,
+        )
+
+    with Live(
+        get_renderable=_render,
+        console=console,
+        screen=True,
+        auto_refresh=True,
+        refresh_per_second=8,
+        transient=False,
+        vertical_overflow="crop",
+    ) as live:
+        while True:
+            live.refresh()
+            try:
+                key = _read_key()
+            except KeyboardInterrupt:
+                break
+            total = len(lines)
+            page = max(1, _body_rows() - 1)
+            max_off = max(0, total - _body_rows())
+            if key == "ESC":
+                break
+            elif key == "UP":
+                offset = max(0, offset - 1)
+            elif key == "DOWN":
+                offset = min(max_off, offset + 1)
+            elif key == "PAGEUP":
+                offset = max(0, offset - page)
+            elif key == "PAGEDOWN":
+                offset = min(max_off, offset + page)
+            elif key == "HOME":
+                offset = 0
+            elif key == "END":
+                offset = max_off
 
 
 _BREAKDOWN_KEYS = ("system", "tools", "history", "tool_io", "reasoning")
