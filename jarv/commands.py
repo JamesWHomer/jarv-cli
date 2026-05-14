@@ -519,13 +519,22 @@ def cmd_sessions() -> None:
     n = len(rows)
     selected = next((i for i, r in enumerate(rows) if r["is_current"]), 0)
 
+    def _truncate(value: str, width: int) -> str:
+        if width <= 0:
+            return ""
+        if len(value) <= width:
+            return value
+        if width <= 3:
+            return value[:width]
+        return value[:width - 3] + "..."
+
     def _visible_rows(term_h: int, include_footer: bool = True) -> int:
-        """Return a row count that keeps the whole live panel inside the viewport."""
+        """Return the row count that fills the alternate screen without overflowing."""
         # Panel border is 2 rows. The header consumes 1 content row, and the
         # footer consumes 2 more (blank spacer + controls) when there is room.
         content_rows = max(1, term_h - 2)
         reserved = 3 if include_footer else 1
-        return max(1, min(10, content_rows - reserved))
+        return max(1, content_rows - reserved)
 
     def _max_vis() -> int:
         term_h = console.size.height
@@ -543,7 +552,10 @@ def cmd_sessions() -> None:
     offset = _clamp_offset(selected, 0)
 
     def _render(sel: int, off: int) -> Panel:
+        term_w = console.size.width
         term_h = console.size.height
+        panel_width = max(1, term_w)
+        inner_width = max(1, panel_width - 4)
         show_footer = term_h >= 6
         mv = _visible_rows(term_h, include_footer=show_footer)
         off = _clamp_offset(sel, off)
@@ -552,32 +564,69 @@ def cmd_sessions() -> None:
 
         parts: list = []
 
-        parts.append(Text(f"  showing {start + 1}–{end} of {n}", style="dim", no_wrap=True, overflow="ellipsis"))
+        parts.append(
+            Text(
+                _truncate(f"  showing {start + 1}–{end} of {n}", inner_width),
+                style="dim",
+                no_wrap=True,
+                overflow="crop",
+            )
+        )
 
         for i in range(start, end):
             r = rows[i]
             is_sel = i == sel
             t = Text(no_wrap=True, overflow="ellipsis")
-            t.append(" › " if is_sel else "   ", style="bold cyan" if is_sel else "")
-            t.append("● " if r["is_current"] else "  ", style="green" if r["is_current"] else "")
-            t.append(f"{r['short_id']:<24}", style="bold cyan" if is_sel else "cyan")
-            t.append(f"{r['time_str']:<12}", style="bold" if is_sel else "dim")
+            prefix = " › " if is_sel else "   "
+            marker = "● " if r["is_current"] else "  "
+            remaining = inner_width - len(prefix) - len(marker)
+            id_width = max(0, min(24, remaining))
+            remaining -= id_width
+            time_width = max(0, min(12, remaining))
+            remaining -= time_width
+            snippet_width = max(0, remaining)
+
+            t.append(_truncate(prefix, inner_width), style="bold cyan" if is_sel else "")
+            if inner_width > len(prefix):
+                t.append(_truncate(marker, inner_width - len(prefix)), style="green" if r["is_current"] else "")
+            if id_width:
+                short_id = _truncate(r["short_id"], id_width)
+                t.append(f"{short_id:<{id_width}}", style="bold cyan" if is_sel else "cyan")
+            if time_width:
+                time_str = _truncate(r["time_str"], time_width)
+                t.append(f"{time_str:<{time_width}}", style="bold" if is_sel else "dim")
             snip = r["snippet"] or "no messages"
-            t.append(snip, style="bold" if is_sel else "dim")
+            if snippet_width:
+                t.append(_truncate(snip, snippet_width), style="bold" if is_sel else "dim")
             parts.append(t)
 
         if show_footer:
             parts.append(Text(""))
-            parts.append(Text("↑↓ navigate   Enter load   q cancel", style="dim italic", no_wrap=True, overflow="ellipsis"))
+            parts.append(
+                Text(
+                    _truncate("↑↓ navigate   Enter load   q cancel", inner_width),
+                    style="dim italic",
+                    no_wrap=True,
+                    overflow="crop",
+                )
+            )
 
-        return Panel(Group(*parts), title="[bold]sessions[/bold]", border_style="bright_black", padding=(0, 1))
+        return Panel(
+            Group(*parts),
+            title="[bold]sessions[/bold]",
+            border_style="bright_black",
+            padding=(0, 1),
+            width=panel_width,
+        )
 
+    loaded_row: dict | None = None
     with Live(
         get_renderable=lambda: _render(selected, offset),
         console=console,
+        screen=True,
         auto_refresh=True,
         refresh_per_second=8,
-        transient=True,
+        transient=False,
         vertical_overflow="crop",
     ) as live:
         while True:
@@ -602,16 +651,19 @@ def cmd_sessions() -> None:
             elif key == "ENTER":
                 row = rows[selected]
                 set_terminal_session(row["sid"])
-                label = sessions[row["sid"]].get("label", row["sid"])
-                console.print(
-                    f"[green]Loaded[/green] [bold cyan]{row['short_id']}[/bold cyan] [dim]({label})[/dim]"
-                )
-                return
+                loaded_row = row
+                break
             elif key == "ESC":
                 break
 
             offset = _clamp_offset(selected, offset)
 
+    if loaded_row is not None:
+        label = sessions[loaded_row["sid"]].get("label", loaded_row["sid"])
+        console.print(
+            f"[green]Loaded[/green] [bold cyan]{loaded_row['short_id']}[/bold cyan] [dim]({label})[/dim]"
+        )
+        return
     console.print("[dim]Cancelled.[/dim]")
 
 
