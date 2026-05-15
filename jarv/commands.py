@@ -51,9 +51,7 @@ from .usage import (
 ARCHIVE_DIR = CONFIG_DIR / "archive"
 
 GITHUB_REPO = "JamesWHomer/jarv"
-GITHUB_API = f"https://api.github.com/repos/{GITHUB_REPO}/commits/main"
-INSTALL_URL = f"https://github.com/{GITHUB_REPO}.git"
-SHA_FILE = CONFIG_DIR / "last_sha.txt"
+PYPI_VERSION_URL = "https://pypi.org/pypi/jarv/json"
 UPDATE_FLAG_FILE = CONFIG_DIR / "update_available.txt"
 LAST_CHECK_FILE = CONFIG_DIR / "last_update_check.txt"
 UPDATE_CHECK_INTERVAL_HOURS = 24
@@ -257,7 +255,7 @@ jarv is a command-line AI assistant powered by OpenAI.
 - `jarv /archive` - Archive this terminal's session history and start a fresh one on the next message.
 - `jarv /sessions` / `jarv /session` - List sessions by recency. In an interactive terminal you can scroll through all of them; when stdout is not a TTY (e.g. piped), only the 5 most recent are listed.
 - `jarv /sessions <id>` - Bind this terminal to a specific session id (prefix match).
-- `jarv /update` - Check GitHub for the latest main commit and install it with pip.
+- `jarv /update` - Check PyPI for the latest version and install it with pip.
 
 ## Heads-up mode
 
@@ -317,7 +315,7 @@ Each terminal is bound to exactly one session at a time. By default a fresh term
 
 ## Updates
 
-- `jarv /update` checks `{GITHUB_REPO}` on GitHub and installs the latest version from `{INSTALL_URL}`.
+- `jarv /update` checks PyPI for the latest version and installs it with pip.
 - A one-shot `jarv <question>` (arguments on the command line, not heads-up mode) fires a fully non-blocking background check when `check_updates` is true. If an update is found it is saved locally; the next invocation shows the notification instantly with no network wait.
 - The background check is throttled to at most once every {UPDATE_CHECK_INTERVAL_HOURS} hours.
 - Set `check_updates` to `false` (`jarv /set check_updates false`) to disable the background check entirely.
@@ -329,7 +327,6 @@ Each terminal is bound to exactly one session at a time. By default a fresh term
 - Config file: `{CONFIG_FILE}`
 - Session metadata file: `{SESSIONS_FILE}`
 - Session history and artifacts: `{SESSIONS_DIR}`
-- Last known update SHA: `{SHA_FILE}`
 
 ## Version
 
@@ -338,25 +335,14 @@ jarv {__version__}
     console.print(jarv_panel(Markdown(flatten_headings(about)), title="about", subtitle=f"v{__version__}"))
 
 
-def _fetch_latest_sha() -> str | None:
+def _fetch_latest_pypi_version() -> str | None:
     try:
-        req = urllib.request.Request(GITHUB_API, headers={"User-Agent": "jarv-updater"})
+        req = urllib.request.Request(PYPI_VERSION_URL, headers={"User-Agent": "jarv-updater"})
         with urllib.request.urlopen(req, timeout=3) as resp:
             data = json.loads(resp.read())
-            return data["sha"]
+            return data["info"]["version"]
     except Exception:
         return None
-
-
-def _load_known_sha() -> str:
-    if SHA_FILE.exists():
-        return SHA_FILE.read_text().strip()
-    return ""
-
-
-def _save_sha(sha: str) -> None:
-    CONFIG_DIR.mkdir(exist_ok=True)
-    SHA_FILE.write_text(sha)
 
 
 def _should_check_now() -> bool:
@@ -378,7 +364,7 @@ def _record_check_time() -> None:
 
 
 def _check_update_background() -> None:
-    """Fetch the latest SHA from GitHub and write a flag file if an update is available.
+    """Check PyPI for a newer version and write a flag file if one is available.
 
     Runs in a daemon thread — never blocks the main process. The flag is read
     (and cleared) on the *next* jarv invocation so there is zero network wait
@@ -387,15 +373,10 @@ def _check_update_background() -> None:
     if not _should_check_now():
         return
     _record_check_time()
-    latest = _fetch_latest_sha()
+    latest = _fetch_latest_pypi_version()
     if not latest:
         return
-    known = _load_known_sha()
-    if not known:
-        # First run — just record the baseline SHA silently.
-        _save_sha(latest)
-        return
-    if latest != known:
+    if latest != __version__:
         CONFIG_DIR.mkdir(exist_ok=True)
         UPDATE_FLAG_FILE.write_text(latest)
 
@@ -405,37 +386,32 @@ def maybe_print_update_available() -> None:
     if not UPDATE_FLAG_FILE.exists():
         return
     try:
-        sha = UPDATE_FLAG_FILE.read_text().strip()
+        latest = UPDATE_FLAG_FILE.read_text().strip()
         UPDATE_FLAG_FILE.unlink(missing_ok=True)
-        if sha and sha != _load_known_sha():
-            console.print("[yellow]Update available![/yellow] Run [bold]jarv /update[/bold] to install.")
+        if latest and latest != __version__:
+            console.print(f"[yellow]Update available![/yellow] [dim]v{__version__} → v{latest}[/dim]  Run [bold]jarv /update[/bold] to install.")
     except Exception:
         pass
 
 
 def cmd_update() -> None:
     console.print("[dim]⟳ Checking for updates…[/dim]")
-    latest = _fetch_latest_sha()
+    latest = _fetch_latest_pypi_version()
     if latest is None:
-        console.print("[bold red]✗[/bold red] [red]Could not reach GitHub.[/red]")
+        console.print("[bold red]✗[/bold red] [red]Could not reach PyPI.[/red]")
         return
-    known = _load_known_sha()
-    if known and latest == known:
-        console.print("[bold green]✓[/bold green] [green]Already up to date.[/green]")
+    if latest == __version__:
+        console.print(f"[bold green]✓[/bold green] [green]Already up to date.[/green] [dim](v{__version__})[/dim]")
         return
-    short = latest[:12]
-    if not known:
-        console.print(f"[bold cyan]↓[/bold cyan] Installing latest version [dim]({short})[/dim]…")
-    else:
-        console.print(f"[bold cyan]↓[/bold cyan] Update found [dim]({short})[/dim]. Installing…")
+    console.print(f"[bold cyan]↓[/bold cyan] Update found [dim](v{__version__} → v{latest})[/dim]. Installing…")
     with console.status("[dim]Running pip install…[/dim]", spinner="dots"):
         result = subprocess.run(
-            [sys.executable, "-m", "pip", "install", "--force-reinstall", f"git+https://github.com/{GITHUB_REPO}.git"],
+            [sys.executable, "-m", "pip", "install", "--upgrade", "jarv"],
             capture_output=True,
             text=True,
         )
     if result.returncode == 0:
-        _save_sha(latest)
+        UPDATE_FLAG_FILE.unlink(missing_ok=True)
         console.print("[bold green]✓[/bold green] [green]Updated successfully.[/green] [dim]Run jarv again to use the new version.[/dim]")
     else:
         console.print("[bold red]✗[/bold red] [red]Update failed:[/red]")

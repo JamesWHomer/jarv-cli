@@ -14,16 +14,7 @@ jarv refactor the auth module           # complex tasks get split across subagen
 Requires **Python 3.10+** and an **OpenAI API key**.
 
 ```bash
-pip install git+https://github.com/JamesWHomer/jarv.git
-jarv /set api_key YOUR_OPENAI_API_KEY
-```
-
-Or clone and install locally:
-
-```bash
-git clone https://github.com/JamesWHomer/jarv.git
-cd jarv
-pip install -e .
+pip install jarv
 jarv /set api_key YOUR_OPENAI_API_KEY
 ```
 
@@ -161,7 +152,6 @@ All state is stored in `~/.jarv/` (on Windows, `%USERPROFILE%\.jarv\`):
 ~/.jarv/
 ├── config.json                      # settings and optional API key
 ├── sessions.json                    # terminal → session mappings
-├── last_sha.txt                     # last seen GitHub SHA for update checks
 ├── sessions/
 │   ├── history-<hash>.json          # conversation history
 │   ├── artifacts-<hash>.json        # subagent artifacts
