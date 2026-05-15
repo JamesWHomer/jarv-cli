@@ -184,7 +184,7 @@ def print_help() -> None:
     cmd_table.add_row("jarv <question>", "Ask jarv anything")
     cmd_table.add_row("jarv /set <key> <value>", "Set a config value")
     cmd_table.add_row("jarv /unset <key>", "Reset a config key to its default")
-    cmd_table.add_row("jarv /clear", "Start a fresh session on the next message")
+    cmd_table.add_row("jarv /new", "Start a fresh session on the next message")
     cmd_table.add_row("jarv /archive", "Archive this terminal's session and start a fresh one")
     cmd_table.add_row("jarv /sessions, /session", "List sessions (all in a TTY; 5 most recent when piped/non-TTY)")
     cmd_table.add_row("jarv /sessions <id>", "Load a specific session into this terminal by id prefix")
@@ -251,7 +251,7 @@ jarv is a command-line AI assistant powered by OpenAI.
 - `jarv /usage` - Show token usage for the current session.
 - `jarv /undo [n]` - Unsend the last n exchanges (default 1). The removed exchange is pushed onto a redo stack.
 - `jarv /redo [n]` - Restore the last n undone exchanges (default 1). Sending a new message clears the redo stack.
-- `jarv /clear` - Start a fresh session on the next message.
+- `jarv /new` - Start a fresh session on the next message.
 - `jarv /archive` - Archive this terminal's session history and start a fresh one on the next message.
 - `jarv /sessions` / `jarv /session` - List sessions by recency. In an interactive terminal you can scroll through all of them; when stdout is not a TTY (e.g. piped), only the 5 most recent are listed.
 - `jarv /sessions <id>` - Bind this terminal to a specific session id (prefix match).
@@ -259,7 +259,7 @@ jarv is a command-line AI assistant powered by OpenAI.
 
 ## Heads-up mode
 
-Run `jarv` with no prompt to start an interactive session. Type a prompt and press Enter to send it. Commands start with `/` (e.g. `/clear`, `/history`). Type `exit`, `quit`, or `/exit`, or press Ctrl+C, to leave.
+Run `jarv` with no prompt to start an interactive session. Type a prompt and press Enter to send it. Commands start with `/` (e.g. `/new`, `/history`). Type `exit`, `quit`, or `/exit`, or press Ctrl+C, to leave.
 
 ## How jarv works
 
@@ -308,7 +308,7 @@ Session metadata file: `{SESSIONS_FILE}`
 
 Each terminal is bound to exactly one session at a time. By default a fresh terminal gets its own session (id derived from terminal fingerprint). Per-session history and artifact sidecars live in `{SESSIONS_DIR}` as `history-<hash>.json` and `artifacts-<hash>.json`.
 
-- `jarv /clear` removes the terminal's session mapping. The next prompt starts a fresh session.
+- `jarv /new` starts a fresh session by unmapping the current terminal. The next prompt creates a new session.
 - `jarv /archive` archives the current session's history+artifacts and removes the terminal's mapping. The next prompt starts a fresh session.
 - `jarv /sessions` / `jarv /session` lists sessions by recency (all in a TTY; 5 most recent when stdout is not a TTY).
 - `jarv /sessions <id>` binds a specific session id (prefix match) to this terminal.
@@ -420,9 +420,9 @@ def cmd_update() -> None:
             console.print(output, style="dim")
 
 
-def cmd_clear() -> None:
+def cmd_new() -> None:
     forget_current_session()
-    console.print("[bold green]✓[/bold green] [green]Cleared.[/green] [dim]New session starts on your next message.[/dim]")
+    console.print("[bold green]✓[/bold green] [green]New session starts on your next message.[/green]")
 
 
 def archive_session_files(history_path: Path) -> Path | None:
@@ -497,7 +497,7 @@ def cmd_archive() -> None:
 
     forget_current_session()
     if archived_history is not None:
-        console.print("[bold green]✓[/bold green] [green]Cleared.[/green] [dim]New session starts on your next message.[/dim]")
+        console.print("[bold green]✓[/bold green] [green]New session starts on your next message.[/green]")
 
 
 

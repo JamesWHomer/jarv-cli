@@ -32,10 +32,14 @@ def load_config() -> dict:
     from .history import migrate_flat_session_files
     migrate_flat_session_files()
     if not CONFIG_FILE.exists():
-        CONFIG_FILE.write_text(json.dumps(DEFAULT_CONFIG, indent=2), encoding="utf-8")
-        console.print(f"[green]Config created at[/green] {CONFIG_FILE}")
-        console.print("[dim]Set your OpenAI API key there or via the OPENAI_API_KEY env var.[/dim]")
-        sys.exit(0)
+        try:
+            from .setup import run_setup_wizard
+            config = run_setup_wizard()
+        except (EOFError, KeyboardInterrupt):
+            console.print("\n[dim]Setup cancelled.[/dim]")
+            sys.exit(130)
+        save_config(config)
+        return config
     try:
         config = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
     except json.JSONDecodeError as e:

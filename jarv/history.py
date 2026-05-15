@@ -202,12 +202,10 @@ def set_terminal_session(session_id: str) -> None:
 
 
 def forget_current_session() -> None:
-    """Remove the current terminal's mapping and its session metadata entry."""
+    """Remove the current terminal's session mapping (keeps session metadata)."""
     terminal_id, _ = detect_terminal()
     data = load_sessions()
-    session_id = data["terminals"].pop(terminal_id, None)
-    if session_id:
-        data["sessions"].pop(session_id, None)
+    data["terminals"].pop(terminal_id, None)
     save_sessions(data)
 
 

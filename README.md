@@ -45,7 +45,7 @@ Run `jarv` with no arguments to enter an interactive prompt loop.
 jarv> what files changed today?
 jarv> now run the tests
 jarv> /history
-jarv> /clear
+jarv> /new
 ```
 
 - Type a prompt and press Enter.
@@ -106,7 +106,7 @@ The terminal shows a live progress panel as children run, with a green checkmark
 | `/set <key> <value>` | Set a config value |
 | `/unset <key>` | Reset a config key to default |
 | `/config` | Show current settings |
-| `/clear` | Archive the current session and start fresh |
+| `/new` | Start a fresh session on the next prompt |
 | `/archive` | Archive session history and artifacts |
 | `/sessions` | Browse sessions (interactive when in a TTY) |
 | `/sessions <id>` | Load a specific session by ID prefix |
@@ -124,7 +124,7 @@ All commands work both as `jarv /command` (one-shot) and inside heads-up mode.
 
 Each terminal is automatically bound to its own session. Jarv identifies terminals using environment variables (`WT_SESSION`, `TERM_SESSION_ID`, `TMUX`, `STY`) with a parent-process fallback, so history persists across runs in the same terminal.
 
-- `/clear` archives the current session and starts fresh on the next prompt.
+- `/new` starts a fresh session on the next prompt without archiving the current session.
 - `/sessions` opens an interactive browser (arrow keys to navigate, Enter to load, `a` to archive, `d` to delete, `p` to preview, `Tab` to switch views, Ctrl+F to search).
 - `/undo` and `/redo` let you step through recent exchanges.
 
