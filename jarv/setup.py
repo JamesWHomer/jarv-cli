@@ -1,22 +1,22 @@
 import os
 
-from rich.prompt import Prompt, Confirm
+from rich.prompt import Prompt
 from rich.text import Text
 
 from .display import console, jarv_panel, section_rule
 
 
 MODELS = [
-    ("gpt-5.4-mini", "Fast & cheap — great default"),
-    ("gpt-4.1-nano", "Fastest, lowest cost"),
-    ("gpt-4.1-mini", "Balanced speed and quality"),
-    ("gpt-4.1", "High quality, slower"),
-    ("o4-mini", "Reasoning model, best for complex tasks"),
+    ("gpt-5.5", "Largest, slowest, smartest"),
+    ("gpt-5.4-mini", "Smaller, faster, cheaper"),
+    ("gpt-5.4-nano", "Smallest, fastest, cheapest"),
 ]
 
 
-def run_setup_wizard() -> dict:
-    from .config import DEFAULT_CONFIG
+def run_setup_wizard() -> dict | None:
+    """Run the interactive setup wizard. Returns updated config or None if the
+    user needs to set their env var first."""
+    from .config import load_config, save_config
 
     console.print()
     console.print(jarv_panel(
@@ -26,32 +26,34 @@ def run_setup_wizard() -> dict:
         ),
         title="setup",
     ))
-    console.print()
+
+    config = load_config()
 
     # --- API key ---
-    console.print(section_rule("API Key"))
     console.print()
+    console.print(section_rule("API Key"))
 
     env_key = os.environ.get("OPENAI_API_KEY", "")
+    config_key = config.get("api_key", "")
     if env_key:
         masked = env_key[:7] + "..." + env_key[-4:]
-        console.print(f"  [green]Found[/green] OPENAI_API_KEY in your environment [dim]({masked})[/dim]")
-        use_env = Confirm.ask("  Use this key?", default=True, console=console)
-        if use_env:
-            api_key = ""
-        else:
-            api_key = _prompt_api_key()
+        console.print(f"\n  [green]Found[/green] OPENAI_API_KEY in your environment [dim]({masked})[/dim]")
+    elif config_key:
+        masked = config_key[:7] + "..." + config_key[-4:]
+        console.print(f"\n  [green]Found[/green] API key in config [dim]({masked})[/dim]")
     else:
-        console.print("  [dim]You'll need an OpenAI API key. Get one at[/dim] [cyan]https://platform.openai.com/api-keys[/cyan]")
+        console.print(f"\n  [dim]You'll need an OpenAI API key. Get one at[/dim] [cyan]https://platform.openai.com/api-keys[/cyan]")
         console.print()
         api_key = _prompt_api_key()
+        config["api_key"] = api_key
 
     # --- Model ---
     console.print()
     console.print(section_rule("Model"))
     console.print()
+
     for i, (name, desc) in enumerate(MODELS, 1):
-        default_tag = " [bold green](default)[/bold green]" if name == DEFAULT_CONFIG["model"] else ""
+        default_tag = " [bold green](default)[/bold green]" if i == 1 else ""
         console.print(f"  [bold cyan]{i}.[/bold cyan] [bold]{name}[/bold] — [dim]{desc}[/dim]{default_tag}")
     console.print()
 
@@ -62,19 +64,19 @@ def run_setup_wizard() -> dict:
     ).strip()
 
     model = _resolve_model(choice)
-
-    # --- Build config ---
-    config = dict(DEFAULT_CONFIG)
-    config["api_key"] = api_key
     config["model"] = model
+    save_config(config)
 
     # --- Done ---
     console.print()
-    display_key = "[dim](from environment)[/dim]" if not api_key and env_key else "[dim]***[/dim]"
+    if env_key:
+        key_display = "[dim](from OPENAI_API_KEY env var)[/dim]"
+    else:
+        key_display = "[dim](saved to config)[/dim]"
     console.print(jarv_panel(
         Text.from_markup(
             f"[bold green]You're all set![/bold green]\n\n"
-            f"  API key   {display_key}\n"
+            f"  API key   {key_display}\n"
             f"  Model     [bold]{model}[/bold]\n\n"
             f"[dim]Run [bold]jarv /config[/bold] to view settings or [bold]jarv /set <key> <value>[/bold] to change them.[/dim]"
         ),
@@ -94,8 +96,6 @@ def _prompt_api_key() -> str:
 
 
 def _resolve_model(choice: str) -> str:
-    from .config import DEFAULT_CONFIG
-
     try:
         idx = int(choice)
         if 1 <= idx <= len(MODELS):
@@ -107,4 +107,4 @@ def _resolve_model(choice: str) -> str:
         if choice.lower() == name.lower():
             return name
 
-    return DEFAULT_CONFIG["model"]
+    return MODELS[0][0]

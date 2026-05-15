@@ -4,11 +4,18 @@ import sys
 import threading
 
 from . import __version__
-from .config import CONFIG_FILE, load_config, validate_config
+from .config import load_config, validate_config
 from .display import console
 
 
-SLASH_COMMANDS = {"/help", "/about", "/update", "/new", "/archive", "/session", "/sessions", "/history", "/usage", "/set", "/unset", "/config", "/undo", "/redo"}
+SLASH_COMMANDS = {"/help", "/about", "/update", "/new", "/archive", "/session", "/sessions", "/history", "/usage", "/set", "/unset", "/config", "/undo", "/redo", "/setup"}
+
+
+def _setup_nudge() -> None:
+    """Print a one-line nudge if the env key is missing."""
+    from .config import is_setup_complete
+    if not is_setup_complete():
+        console.print("[dim]Tip: run [bold cyan]jarv /setup[/bold cyan] to configure your API key and get started.[/dim]\n")
 
 
 def _run_slash_command(command: str, rest: list[str]) -> bool:
@@ -29,6 +36,15 @@ def _run_slash_command(command: str, rest: list[str]) -> bool:
         print_about,
         print_help,
     )
+
+    # /setup is handled directly — no nudge needed
+    if command == "/setup":
+        cmd_setup()
+        return True
+
+    # For all other commands, nudge if setup is incomplete
+    _setup_nudge()
+
     if command == "/help":
         print_help()
     elif command == "/about":
@@ -58,6 +74,15 @@ def _run_slash_command(command: str, rest: list[str]) -> bool:
     else:
         return False
     return True
+
+
+def cmd_setup() -> None:
+    """Run the interactive setup wizard."""
+    from .setup import run_setup_wizard
+    try:
+        run_setup_wizard()
+    except (EOFError, KeyboardInterrupt):
+        console.print("\n[dim]Setup cancelled.[/dim]")
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -101,6 +126,13 @@ def main() -> None:
             console.print("[dim]Run [bold]jarv /help[/bold] for a list of commands.[/dim]")
         return
 
+    # First-run: auto-trigger setup wizard if no config exists yet
+    from .config import CONFIG_FILE as _cf, is_setup_complete
+    if not _cf.exists():
+        cmd_setup()
+        if not is_setup_complete():
+            sys.exit(1)
+
     config = load_config()
     if not validate_config(config):
         sys.exit(1)
@@ -117,7 +149,7 @@ def main() -> None:
 
     api_key = config.get("api_key") or os.environ.get("OPENAI_API_KEY", "")
     if not api_key:
-        console.print(f"[red]No API key found.[/red] Edit {CONFIG_FILE} or set OPENAI_API_KEY.")
+        console.print("[red]No API key found.[/red] Run [bold cyan]jarv /setup[/bold cyan] to get started.")
         sys.exit(1)
 
     from openai import OpenAI

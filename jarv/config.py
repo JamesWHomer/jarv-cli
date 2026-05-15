@@ -32,14 +32,8 @@ def load_config() -> dict:
     from .history import migrate_flat_session_files
     migrate_flat_session_files()
     if not CONFIG_FILE.exists():
-        try:
-            from .setup import run_setup_wizard
-            config = run_setup_wizard()
-        except (EOFError, KeyboardInterrupt):
-            console.print("\n[dim]Setup cancelled.[/dim]")
-            sys.exit(130)
-        save_config(config)
-        return config
+        CONFIG_FILE.write_text(json.dumps(DEFAULT_CONFIG, indent=2), encoding="utf-8")
+        return dict(DEFAULT_CONFIG)
     try:
         config = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
     except json.JSONDecodeError as e:
@@ -66,6 +60,19 @@ def load_config() -> dict:
         save_config(config)
 
     return config
+
+
+def is_setup_complete() -> bool:
+    import os
+    if os.environ.get("OPENAI_API_KEY", ""):
+        return True
+    if CONFIG_FILE.exists():
+        try:
+            config = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+            return bool(config.get("api_key"))
+        except (json.JSONDecodeError, OSError):
+            pass
+    return False
 
 
 def save_config(config: dict) -> None:
