@@ -195,6 +195,7 @@ def print_help() -> None:
     cmd_table.add_row("jarv /config", "Show current settings")
     cmd_table.add_row("jarv /update", "Update jarv to the latest version")
     cmd_table.add_row("jarv /about", "Show detailed information about jarv")
+    cmd_table.add_row("jarv /setup", "Run the setup wizard")
     cmd_table.add_row("jarv /help", "Show this help")
 
     key_table = Table(box=None, show_header=False, padding=(0, 2), pad_edge=False)
@@ -394,6 +395,20 @@ def maybe_print_update_available() -> None:
         pass
 
 
+def _is_pipx_env() -> bool:
+    """Detect if jarv is running inside a pipx-managed virtualenv."""
+    exe = Path(sys.executable).resolve()
+    return "pipx" in exe.parts
+
+def _run_pip_upgrade() -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [sys.executable, "-m", "pip", "install", "--upgrade", "jarv"],
+        capture_output=True, text=True,
+    )
+
+def _is_externally_managed_error(result: subprocess.CompletedProcess) -> bool:
+    return result.returncode != 0 and "externally-managed-environment" in (result.stderr or "")
+
 def cmd_update() -> None:
     console.print("[dim]⟳ Checking for updates…[/dim]")
     latest = _fetch_latest_pypi_version()
@@ -404,12 +419,33 @@ def cmd_update() -> None:
         console.print(f"[bold green]✓[/bold green] [green]Already up to date.[/green] [dim](v{__version__})[/dim]")
         return
     console.print(f"[bold cyan]↓[/bold cyan] Update found [dim](v{__version__} → v{latest})[/dim]. Installing…")
-    with console.status("[dim]Running pip install…[/dim]", spinner="dots"):
-        result = subprocess.run(
-            [sys.executable, "-m", "pip", "install", "--upgrade", "jarv"],
-            capture_output=True,
-            text=True,
-        )
+
+    if _is_pipx_env():
+        with console.status("[dim]Running pipx upgrade…[/dim]", spinner="dots"):
+            result = subprocess.run(
+                ["pipx", "upgrade", "jarv"],
+                capture_output=True, text=True,
+            )
+    else:
+        with console.status("[dim]Running pip install…[/dim]", spinner="dots"):
+            result = _run_pip_upgrade()
+        if _is_externally_managed_error(result):
+            console.print("[dim]System Python detected — retrying with pipx…[/dim]")
+            pipx_available = subprocess.run(
+                ["pipx", "--version"], capture_output=True, text=True,
+            ).returncode == 0
+            if pipx_available:
+                with console.status("[dim]Running pipx upgrade…[/dim]", spinner="dots"):
+                    result = subprocess.run(
+                        ["pipx", "upgrade", "jarv"],
+                        capture_output=True, text=True,
+                    )
+            else:
+                console.print("[bold red]✗[/bold red] [red]Update failed:[/red] pip is blocked by your system Python (PEP 668).")
+                console.print("[dim]Install pipx and reinstall jarv with it:[/dim]")
+                console.print("  [bold]brew install pipx && pipx install jarv[/bold]")
+                return
+
     if result.returncode == 0:
         UPDATE_FLAG_FILE.unlink(missing_ok=True)
         console.print("[bold green]✓[/bold green] [green]Updated successfully.[/green] [dim]Run jarv again to use the new version.[/dim]")
@@ -1289,8 +1325,7 @@ def cmd_sessions(args: list | None = None) -> None:
         get_renderable=_render,
         console=console,
         screen=True,
-        auto_refresh=True,
-        refresh_per_second=8,
+        auto_refresh=False,
         transient=False,
         vertical_overflow="crop",
     ) as live:
@@ -1669,8 +1704,7 @@ def cmd_history() -> None:
         get_renderable=_render,
         console=console,
         screen=True,
-        auto_refresh=True,
-        refresh_per_second=8,
+        auto_refresh=False,
         transient=False,
         vertical_overflow="crop",
     ) as live:
