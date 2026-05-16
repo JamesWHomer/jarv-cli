@@ -53,7 +53,7 @@ def status_line(prefix: str, message: str, prefix_style: str = "bold cyan", mess
         return f"[{prefix_style}]{prefix}[/{prefix_style}] [{message_style}]{message}[/{message_style}]"
     return f"[{prefix_style}]{prefix}[/{prefix_style}] {message}"
 
-DISPLAY_LINE_LIElastic License 2.0 = 30
+DISPLAY_LINE_LIMIT = 30
 
 
 def flatten_headings(text: str) -> str:
@@ -62,9 +62,9 @@ def flatten_headings(text: str) -> str:
 
 def display_output(output: str) -> None:
     lines = output.splitlines()
-    if len(lines) > DISPLAY_LINE_LIElastic License 2.0:
-        console.print("\n".join(lines[:DISPLAY_LINE_LIElastic License 2.0]), style="dim", markup=False)
-        hidden = len(lines) - DISPLAY_LINE_LIElastic License 2.0
+    if len(lines) > DISPLAY_LINE_LIMIT:
+        console.print("\n".join(lines[:DISPLAY_LINE_LIMIT]), style="dim", markup=False)
+        hidden = len(lines) - DISPLAY_LINE_LIMIT
         console.print(f"[dim italic]... {hidden} more lines hidden (full output sent to model)[/dim italic]")
     else:
         console.print(output, style="dim", markup=False)

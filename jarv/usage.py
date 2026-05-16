@@ -92,7 +92,7 @@ def estimate_context_breakdown(
         return {k: 0 for k in _BREAKDOWN_KEYS}
 
 USAGE_VERSION = 1
-RECENT_REQUEST_LIElastic License 2.0 = 50
+RECENT_REQUEST_LIMIT = 50
 TOKENS_PER_MILLION = 1_000_000
 
 _usage_lock = Lock()
@@ -456,7 +456,7 @@ def record_response_usage(
             recent = data.setdefault("recent_requests", [])
             if isinstance(recent, list):
                 recent.append(record)
-                del recent[:-RECENT_REQUEST_LIElastic License 2.0]
+                del recent[:-RECENT_REQUEST_LIMIT]
 
             save_usage(data, usage_path, warn=False)
     except Exception:
