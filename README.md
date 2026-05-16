@@ -86,6 +86,24 @@ Jarv wraps the OpenAI Responses API with a tool-calling agent loop. The model ca
 
 On Windows, commands run through PowerShell. On other platforms, they run through the system shell.
 
+### Command safety
+
+Before executing a shell command, jarv can prompt you for confirmation. The `command_safety` config key controls this:
+
+| Level | Behavior |
+| --- | --- |
+| `risky` (default) | Prompts for confirmation when a command matches dangerous patterns — recursive deletion, privilege escalation, network exfiltration, disk formatting, credential access, force pushes, and more. |
+| `all` | Every command requires your explicit approval before running. |
+| `none` | Commands run immediately with no confirmation prompt. |
+
+Set the level during setup (`jarv /setup`) or at any time with:
+
+```bash
+jarv /set command_safety risky    # default — confirm dangerous commands
+jarv /set command_safety all      # confirm everything
+jarv /set command_safety none     # no prompts
+```
+
 ### Subagent orchestration
 
 When the model calls `spawn`, Jarv runs N child agents in parallel. Each child operates independently — running commands, reasoning through subtasks — and terminates by calling `finish` with a detailed report and a short summary. The parent agent can then read any child's full output via `read_artifact`.
@@ -138,6 +156,7 @@ Settings live in `~/.jarv/config.json` (created on first run). Edit the file dir
 | `reasoning_effort` | `""` | Reasoning effort level. Leave empty to disable. |
 | `max_history` | `40` | Number of recent messages kept as context. |
 | `command_timeout` | `60` | Seconds before a shell command is killed. |
+| `command_safety` | `"risky"` | Command confirmation level: `all` (confirm every command), `risky` (confirm dangerous commands only), `none` (no confirmation). |
 | `max_subagent_depth` | `4` | Maximum nesting depth for spawned subagents. |
 | `subagent_thread_pool_max_workers` | `8` | Max parallel subagents per `spawn` call. |
 | `check_updates` | `true` | Background update check on startup (non-blocking, throttled to once per 24h). |

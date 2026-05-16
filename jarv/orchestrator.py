@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Callable
 
 from .artifacts import ArtifactStore
+from .safety import check_command
 from .provider import (
     ProviderError,
     StreamDone,
@@ -179,6 +180,10 @@ def dispatch_tool(
         cmd = args.get("command")
         if not isinstance(cmd, str) or not cmd.strip():
             return "[tool argument error: command must be a non-empty string]"
+        safety_level = config.get("command_safety", "risky")
+        allowed, denial = check_command(cmd, safety_level)
+        if not allowed:
+            return denial
         if on_run_command is not None:
             return on_run_command(cmd)
         result = execute_command(cmd, config.get("command_timeout", 60))

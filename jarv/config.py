@@ -24,6 +24,7 @@ DEFAULT_CONFIG = {
     "reasoning_effort": "",
     "max_history": 40,
     "command_timeout": 60,
+    "command_safety": "risky",
     "system_prompt": DEFAULT_SYSTEM_PROMPT,
     "max_subagent_depth": 4,
     "subagent_thread_pool_max_workers": 8,
@@ -121,5 +122,10 @@ def validate_config(config: dict) -> bool:
         except (TypeError, ValueError):
             console.print(f"[red]Config '{key}' must be a positive integer.[/red]")
             ok = False
+
+    safety = config.get("command_safety", "risky")
+    if safety not in ("all", "risky", "none"):
+        console.print(f"[red]Config 'command_safety' must be one of: all, risky, none.[/red]")
+        ok = False
 
     return ok

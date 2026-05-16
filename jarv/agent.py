@@ -46,6 +46,7 @@ from .orchestrator import (
     dispatch_tool,
     spawn_batch,
 )
+from .safety import check_command
 from .shell import display_command_result, execute_command
 from .usage import estimate_context_breakdown, record_response_usage, usage_file_for
 
@@ -188,10 +189,15 @@ def _dispatch_run_command_with_ui(args: dict, config: dict) -> str:
         msg = "[tool argument error: command must be a non-empty string]"
         console.print(f"[red]{msg}[/red]")
         return msg
+
+    safety_level = config.get("command_safety", "risky")
+    allowed, denial = check_command(cmd, safety_level)
+    if not allowed:
+        console.print(f"[dim]{denial}[/dim]")
+        return denial
+
     console.print()
     console.print(Rule(f"[bold yellow]$ {escape(cmd)}[/bold yellow]", style="yellow", align="left"))
-    # Avoid a constantly repainting spinner while a child process is running;
-    # on Windows this can cause focus annoyances in heads-up mode.
     console.print("[dim]Running command...[/dim]")
     result = execute_command(cmd, config.get("command_timeout", 60))
     display_command_result(result)

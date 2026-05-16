@@ -208,6 +208,7 @@ def print_help() -> None:
     key_table.add_row("reasoning_effort", "Reasoning effort value (empty to disable)")
     key_table.add_row("max_history", "Number of messages to keep as context")
     key_table.add_row("command_timeout", "Seconds before a shell command is killed")
+    key_table.add_row("command_safety", "Command confirmation level (all, risky, none)")
     key_table.add_row("system_prompt", "System prompt sent to the model")
     key_table.add_row("max_subagent_depth", "Max spawn depth for nested subagents")
     key_table.add_row("subagent_thread_pool_max_workers", "Parallel subagents per spawn call")
@@ -298,6 +299,7 @@ Keys:
 - `reasoning_effort` - Optional reasoning effort value. Empty disables this setting.
 - `max_history` - Number of history items kept as context. Default: `{DEFAULT_CONFIG['max_history']}`.
 - `command_timeout` - Seconds before a shell command is killed. Default: `{DEFAULT_CONFIG['command_timeout']}`.
+- `command_safety` - Command confirmation level. `all` = confirm every command, `risky` = confirm only dangerous commands (destructive ops, privilege escalation, network exfil, etc.), `none` = no confirmation. Default: `risky`.
 - `system_prompt` - Instructions sent to the model before each request.
 - `max_subagent_depth` - Maximum recursion depth for `spawn` (root is 0). Default: `{DEFAULT_CONFIG['max_subagent_depth']}`.
 - `subagent_thread_pool_max_workers` - Max parallel children in one `spawn` batch. Default: `{DEFAULT_CONFIG['subagent_thread_pool_max_workers']}`.

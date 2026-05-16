@@ -82,8 +82,8 @@ PROVIDER_MODELS = {
     ],
 }
 
-SETUP_STEPS = {"provider", "key", "model", "base_url"}
-TOTAL_STEPS = 4
+SETUP_STEPS = {"provider", "key", "model", "safety", "base_url"}
+TOTAL_STEPS = 5
 
 
 # ---------------------------------------------------------------------------
@@ -273,6 +273,52 @@ def setup_model(config: dict) -> dict:
     return config
 
 
+def setup_safety(config: dict) -> dict:
+    console.print()
+    console.print(section_rule("Command Safety", step=4, total=TOTAL_STEPS))
+    console.print()
+
+    choices = [
+        ("risky", "Confirm risky commands only", "Detects destructive, privileged, and network commands"),
+        ("all", "Confirm all commands", "Every shell command requires your approval"),
+        ("none", "No confirmation", "Commands run without prompts (power user)"),
+    ]
+    for i, (key, label, desc) in enumerate(choices, 1):
+        default_tag = " [green]← default[/green]" if key == "risky" else ""
+        console.print(f"  [bold cyan]{i}.[/bold cyan] [bold]{label}[/bold] [dim]— {desc}[/dim]{default_tag}")
+    console.print()
+
+    while True:
+        choice = Prompt.ask(
+            "  [bold]Pick a safety level[/bold] [dim](number or name, b=back)[/dim]",
+            default="1",
+            console=console,
+        ).strip()
+        if choice.lower() in ("b", "back"):
+            raise GoBack()
+        resolved = _resolve_safety(choice, choices)
+        if resolved is not None:
+            break
+        console.print("  [red]Invalid choice. Please pick again.[/red]")
+
+    config["command_safety"] = resolved
+    return config
+
+
+def _resolve_safety(choice: str, choices: list) -> str | None:
+    try:
+        idx = int(choice)
+        if 1 <= idx <= len(choices):
+            return choices[idx - 1][0]
+        return None
+    except ValueError:
+        pass
+    for key, label, _ in choices:
+        if choice.lower() in (key.lower(), label.lower()):
+            return key
+    return None
+
+
 def setup_base_url(config: dict) -> dict:
     provider_name = config.get("provider", "openai")
 
@@ -280,7 +326,7 @@ def setup_base_url(config: dict) -> dict:
         return config
 
     console.print()
-    console.print(section_rule("Base URL", step=4, total=TOTAL_STEPS))
+    console.print(section_rule("Base URL", step=5, total=TOTAL_STEPS))
 
     info = PROVIDERS.get(provider_name, {})
     default_url = info.get("base_url") or ""
@@ -396,7 +442,7 @@ def run_setup_wizard(step: str | None = None) -> dict | None:
             title="setup",
         ))
 
-        wizard_steps = [setup_provider, setup_api_key, setup_model, setup_base_url]
+        wizard_steps = [setup_provider, setup_api_key, setup_model, setup_safety, setup_base_url]
         step_idx = 0
         going_back = False
         while step_idx < len(wizard_steps):
@@ -426,13 +472,16 @@ def run_setup_wizard(step: str | None = None) -> dict | None:
     elif step == "model":
         config = setup_model(config)
         save_config(config)
+    elif step == "safety":
+        config = setup_safety(config)
+        save_config(config)
     elif step == "base_url":
         config = setup_base_url(config)
         save_config(config)
         test_connection(config)
     else:
         console.print(f"  [red]Unknown setup step '{step}'.[/red]")
-        console.print(f"  [dim]Available: provider, key, model, base_url[/dim]")
+        console.print(f"  [dim]Available: provider, key, model, safety, base_url[/dim]")
         return config
 
     # --- Done summary ---
@@ -444,11 +493,14 @@ def run_setup_wizard(step: str | None = None) -> dict | None:
     has_key = bool(resolve_api_key(config)) if needs_key else True
 
     if has_key:
+        safety = config.get("command_safety", "risky")
+        safety_labels = {"all": "Confirm all", "risky": "Confirm risky", "none": "No confirmation"}
         console.print(jarv_panel(
             Text.from_markup(
                 f"[bold green]You're all set![/bold green]\n\n"
                 f"  [dim]Provider[/dim]  [bold]{provider_label}[/bold]\n"
-                f"  [dim]Model   [/dim]  [bold]{model}[/bold]\n\n"
+                f"  [dim]Model   [/dim]  [bold]{model}[/bold]\n"
+                f"  [dim]Safety  [/dim]  [bold]{safety_labels.get(safety, safety)}[/bold]\n\n"
                 f"[dim]Type [bold]jarv[/bold] to start chatting, or [bold]jarv /config[/bold] to tweak settings.[/dim]"
             ),
             title="ready",
