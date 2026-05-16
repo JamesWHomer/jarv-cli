@@ -1,6 +1,10 @@
 import re
 
-from .display import console
+from rich.console import Group
+from rich.markup import escape
+from rich.text import Text
+
+from .display import console, jarv_panel
 
 SAFETY_LEVELS = ("all", "risky", "none")
 DEFAULT_SAFETY_LEVEL = "risky"
@@ -119,16 +123,31 @@ def classify_command(command: str) -> tuple[bool, str]:
 
 def prompt_confirmation(command: str, reason: str) -> bool:
     """Ask the user to approve a risky command.  Returns True if approved."""
+    reason_line = Text.from_markup(
+        f"[bold yellow]\u26a0  Risky command[/bold yellow]  [dim]\u2014[/dim]  [yellow]{escape(reason)}[/yellow]"
+    )
+    command_line = Text.assemble(
+        ("$ ", "bold bright_black"),
+        (command, "bold bright_white"),
+    )
+    body = Group(reason_line, Text(""), command_line)
+
     console.print()
-    console.print(f"  [bold yellow]⚠  Risky command detected:[/bold yellow] [dim]{reason}[/dim]")
-    console.print(f"  [bold]$[/bold] {command}")
-    console.print()
+    console.print(jarv_panel(body, title="safety", subtitle="confirm to run", padding=(1, 2)))
+
+    prompt = "[bold]Allow this command?[/bold] [dim]\\[y/N][/dim] [bold cyan]\u203a[/bold cyan] "
     try:
-        choice = console.input("  [bold]Allow this command? [y/N]:[/bold] ").strip().lower()
+        choice = console.input(prompt).strip().lower()
     except (KeyboardInterrupt, EOFError):
-        console.print("\n  [dim]Denied.[/dim]")
+        console.print("[dim]  denied.[/dim]")
         return False
-    return choice in ("y", "yes")
+
+    approved = choice in ("y", "yes")
+    if approved:
+        console.print("[green]  \u2713 approved[/green]\n")
+    else:
+        console.print("[red]  \u2717 denied[/red]\n")
+    return approved
 
 
 def check_command(command: str, safety_level: str) -> tuple[bool, str]:
