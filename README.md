@@ -1,6 +1,6 @@
 # jarv
 
-An OpenAI-powered CLI agent that can run shell commands, fan out work to parallel subagents, and keep track of conversation history across terminal sessions.
+A multi-provider AI-powered CLI agent that can run shell commands, fan out work to parallel subagents, and keep track of conversation history across terminal sessions.
 
 ```bash
 jarv                                    # start an interactive session
