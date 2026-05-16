@@ -398,13 +398,20 @@ def run_setup_wizard(step: str | None = None) -> dict | None:
 
         wizard_steps = [setup_provider, setup_api_key, setup_model, setup_base_url]
         step_idx = 0
+        going_back = False
         while step_idx < len(wizard_steps):
+            fn = wizard_steps[step_idx]
+            if going_back and fn == setup_api_key and config.get("provider") in LOCAL_PROVIDERS:
+                step_idx -= 1
+                continue
+            going_back = False
             try:
-                config = wizard_steps[step_idx](config)
+                config = fn(config)
                 step_idx += 1
             except GoBack:
                 if step_idx > 0:
                     step_idx -= 1
+                    going_back = True
                 else:
                     console.print("\n[dim]Setup cancelled.[/dim]\n")
                     return None

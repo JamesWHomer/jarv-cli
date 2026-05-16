@@ -202,10 +202,12 @@ def set_terminal_session(session_id: str) -> None:
 
 
 def forget_current_session() -> None:
-    """Remove the current terminal's session mapping (keeps session metadata)."""
+    """Point the current terminal at a brand-new session (keeps old session metadata)."""
+    import uuid
+
     terminal_id, _ = detect_terminal()
     data = load_sessions()
-    data["terminals"].pop(terminal_id, None)
+    data["terminals"][terminal_id] = f"{terminal_id}-{uuid.uuid4().hex[:8]}"
     save_sessions(data)
 
 
