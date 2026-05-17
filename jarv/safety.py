@@ -1,4 +1,7 @@
 import re
+import sys
+import threading
+import time
 
 from rich.console import Group
 from rich.markup import escape
@@ -223,24 +226,232 @@ def prompt_confirmation(command: str, reason: str) -> bool:
     return approved
 
 
-def check_command(command: str, safety_level: str) -> tuple[bool, str]:
+def check_command(
+    command: str,
+    safety_level: str,
+    audit: bool = False,
+    config: dict | None = None,
+    history: list | None = None,
+) -> tuple[bool, str]:
     """Gate a command according to the configured safety level.
 
     Returns (allowed, denial_message).
     - allowed=True  → caller should execute the command.
     - allowed=False → caller should return denial_message to the model.
+
+    When `audit=True`, flagged commands are sent to an LLM auditor. If the
+    auditor approves, the command runs automatically. If it defers, the user
+    gets the standard confirmation prompt with the auditor's reason.
     """
     if safety_level == "none":
         return True, ""
 
     if safety_level == "all":
-        if not prompt_confirmation(command, "all commands require approval"):
+        reason = "all commands require approval"
+        if audit:
+            return _audit_gate(command, reason, config, history)
+        if not prompt_confirmation(command, reason):
             return False, "[command denied by user — safety level is set to 'all']"
         return True, ""
 
     # "risky" (default)
     is_risky, reason = classify_command(command)
     if is_risky:
+        if audit:
+            return _audit_gate(command, reason, config, history)
         if not prompt_confirmation(command, reason):
             return False, f"[command denied by user — detected as risky: {reason}]"
     return True, ""
+
+
+_AUDITOR_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+
+
+class _AuditPanel:
+    """Live renderable: safety panel with auditor spinner + prompt line."""
+
+    def __init__(self, body, start_time, audit_state, buf):
+        self.body = body
+        self.start = start_time
+        self.audit_state = audit_state
+        self.buf = buf
+        self.show_auditor = True
+        self.answered = False
+
+    def __rich__(self):
+        parts = [self.body]
+        if self.show_auditor:
+            parts.append(Text(""))
+            if self.audit_state["done"]:
+                reason = escape(self.audit_state["reason"])
+                if self.audit_state["allow"]:
+                    parts.append(Text.from_markup(
+                        f"[green]✓  auditor[/green]  [dim]{reason}[/dim]"
+                    ))
+                else:
+                    parts.append(Text.from_markup(
+                        f"[yellow]⚠  auditor[/yellow]  [dim]{reason}[/dim]"
+                    ))
+            else:
+                now = time.perf_counter()
+                elapsed = int(now - self.start)
+                frame = _AUDITOR_FRAMES[int(now * 10) % len(_AUDITOR_FRAMES)]
+                parts.append(Text.from_markup(
+                    f"[green]{frame}  auditor[/green]  [dim]checking…  {elapsed}s[/dim]"
+                ))
+
+        panel = jarv_panel(
+            Group(*parts), title="safety", subtitle="confirm to run", padding=(1, 2),
+        )
+        buf_str = escape("".join(self.buf))
+        if self.answered and buf_str:
+            is_yes = buf_str.strip().lower() in ("y", "yes")
+            color = "green" if is_yes else "red"
+            prompt = Text.from_markup(
+                f"[bold]Allow this command?[/bold] [dim]\\[y/N][/dim] [bold cyan]›[/bold cyan] [{color}]{buf_str}[/{color}]"
+            )
+        else:
+            prompt = Text.from_markup(
+                f"[bold]Allow this command?[/bold] [dim]\\[y/N][/dim] [bold cyan]›[/bold cyan] {buf_str}"
+            )
+        return Group(panel, prompt)
+
+
+def _audit_gate(
+    command: str,
+    reason: str,
+    config: dict | None,
+    history: list | None,
+) -> tuple[bool, str]:
+    """Show the safety panel with an integrated auditor spinner.
+
+    The auditor runs in a background thread while the user sees an animated
+    spinner inside the panel.  The y/N prompt is rendered below the panel as
+    part of the same Live block, so everything stays cohesive.
+    """
+    from .auditor import audit_command
+
+    body = _build_confirmation_body(command, reason)
+
+    # Non-interactive fallback
+    if not sys.stdout.isatty():
+        console.print()
+        console.print(jarv_panel(body, title="safety", subtitle="confirm to run", padding=(1, 2)))
+        allow, auditor_reason = audit_command(command, reason, config or {}, history)
+        if allow:
+            console.print(f"[green]  ✓ auditor:[/green] [dim]{auditor_reason}[/dim]")
+            return True, ""
+        return False, f"[command denied — auditor: {auditor_reason}]"
+
+    audit_state: dict = {"done": False, "allow": False, "reason": ""}
+
+    def _run_auditor():
+        try:
+            a, r = audit_command(command, reason, config or {}, history)
+            audit_state["allow"] = a
+            audit_state["reason"] = r
+        except Exception as e:
+            audit_state["reason"] = f"auditor unavailable ({type(e).__name__})"
+        audit_state["done"] = True
+
+    thread = threading.Thread(target=_run_auditor, daemon=True)
+    thread.start()
+
+    auto_approve = (config or {}).get("auditor_auto_approve", True)
+    approved = _live_audit_poll(body, audit_state, auto_approve=auto_approve)
+
+    if approved:
+        return True, ""
+    deny = (
+        audit_state["reason"]
+        if audit_state.get("done") and not audit_state["allow"]
+        else reason
+    )
+    return False, f"[command denied by user — detected as risky: {deny}]"
+
+
+# ---------------------------------------------------------------------------
+# Live panel + concurrent keyboard polling
+# ---------------------------------------------------------------------------
+
+def _read_key():
+    """Non-blocking single-character read.  Returns the char or None."""
+    if sys.platform == "win32":
+        import msvcrt
+        if msvcrt.kbhit():
+            return msvcrt.getwch()
+        return None
+    import select
+    if select.select([sys.stdin], [], [], 0)[0]:
+        return sys.stdin.read(1)
+    return None
+
+
+def _live_audit_poll(body, audit_state: dict, *, auto_approve: bool = True) -> bool:
+    """Render the safety panel + auditor + prompt with Rich Live while
+    polling for keyboard input and auditor completion concurrently."""
+    from rich.live import Live
+
+    start = time.perf_counter()
+    buf: list[str] = []
+    renderable = _AuditPanel(body, start, audit_state, buf)
+
+    # Unix: switch to character-at-a-time input
+    restore_term = None
+    if sys.platform != "win32":
+        import termios
+        import tty
+        fd = sys.stdin.fileno()
+        old = termios.tcgetattr(fd)
+        tty.setcbreak(fd)
+        restore_term = lambda: termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+    approved = False
+    cancelled = False
+
+    try:
+        console.print()
+        with Live(renderable, refresh_per_second=10, console=console) as live:
+            console.show_cursor(True)
+            prefilled = False
+            while True:
+                # Pre-fill the auditor's recommendation once it arrives, but
+                # only if the user hasn't already started typing.
+                if audit_state["done"] and not buf and not prefilled:
+                    buf.append("y" if audit_state["allow"] else "n")
+                    prefilled = True
+                    live.refresh()
+
+                ch = _read_key()
+                if ch is not None:
+                    if ch in ("\r", "\n"):
+                        if not audit_state["done"]:
+                            renderable.show_auditor = False
+                        renderable.answered = True
+                        live.refresh()
+                        choice = "".join(buf).strip().lower()
+                        approved = choice in ("y", "yes")
+                        break
+                    elif ch == "\x03":
+                        if not audit_state["done"]:
+                            renderable.show_auditor = False
+                        buf.clear()
+                        live.refresh()
+                        cancelled = True
+                        break
+                    elif ch in ("\x08", "\x7f"):
+                        if buf:
+                            buf.pop()
+                    elif ch >= " ":
+                        buf.append(ch)
+
+                time.sleep(0.05)
+    finally:
+        if restore_term:
+            restore_term()
+
+    if cancelled:
+        console.print("[dim]  denied.[/dim]")
+    elif not approved:
+        console.print()
+    return approved
