@@ -121,16 +121,89 @@ def classify_command(command: str) -> tuple[bool, str]:
     return False, ""
 
 
-def prompt_confirmation(command: str, reason: str) -> bool:
-    """Ask the user to approve a risky command.  Returns True if approved."""
+_CONTEXT_LINES_CAP = 4
+
+
+def _build_confirmation_body(command: str, reason: str) -> Group:
+    """Build the rich panel body, highlighting only risky lines."""
     reason_line = Text.from_markup(
         f"[bold yellow]\u26a0  Risky command[/bold yellow]  [dim]\u2014[/dim]  [yellow]{escape(reason)}[/yellow]"
     )
-    command_line = Text.assemble(
-        ("$ ", "bold bright_black"),
-        (command, "bold bright_white"),
-    )
-    body = Group(reason_line, Text(""), command_line)
+
+    lines = [ln for ln in command.splitlines() if ln.strip()]
+
+    # Single-line command \u2014 show as before
+    if len(lines) <= 1:
+        command_line = Text.assemble(
+            ("$ ", "bold bright_black"),
+            (command.strip(), "bold bright_white"),
+        )
+        return Group(reason_line, Text(""), command_line)
+
+    # Multi-line: classify each line, show risky ones prominently
+    risky_indices: list[int] = []
+    for i, ln in enumerate(lines):
+        is_risky, _ = classify_command(ln)
+        if is_risky:
+            risky_indices.append(i)
+
+    parts: list[Text | str] = [reason_line, Text("")]
+
+    # Context before risky lines
+    if risky_indices:
+        first_risky = risky_indices[0]
+        context_before = lines[:first_risky]
+        if context_before:
+            if len(context_before) <= _CONTEXT_LINES_CAP:
+                for ln in context_before:
+                    parts.append(Text.assemble(("  ", ""), (ln, "dim")))
+            else:
+                for ln in context_before[:2]:
+                    parts.append(Text.assemble(("  ", ""), (ln, "dim")))
+                hidden = len(context_before) - 3
+                parts.append(Text.from_markup(
+                    f"  [dim italic]\u2026 {hidden} more line{'s' if hidden != 1 else ''} \u2026[/dim italic]"
+                ))
+                parts.append(Text.assemble(("  ", ""), (context_before[-1], "dim")))
+            parts.append(Text(""))
+
+        # Risky lines
+        for idx in risky_indices:
+            parts.append(Text.assemble(
+                ("  $ ", "bold bright_black"),
+                (lines[idx], "bold bright_white"),
+            ))
+
+        # Context after last risky line
+        last_risky = risky_indices[-1]
+        context_after = lines[last_risky + 1:]
+        if context_after:
+            parts.append(Text(""))
+            if len(context_after) <= _CONTEXT_LINES_CAP:
+                for ln in context_after:
+                    parts.append(Text.assemble(("  ", ""), (ln, "dim")))
+            else:
+                for ln in context_after[:2]:
+                    parts.append(Text.assemble(("  ", ""), (ln, "dim")))
+                hidden = len(context_after) - 3
+                parts.append(Text.from_markup(
+                    f"  [dim italic]\u2026 {hidden} more line{'s' if hidden != 1 else ''} \u2026[/dim italic]"
+                ))
+                parts.append(Text.assemble(("  ", ""), (context_after[-1], "dim")))
+    else:
+        # Fallback: no individual line matched (pattern spans lines)
+        command_line = Text.assemble(
+            ("$ ", "bold bright_black"),
+            (command.strip(), "bold bright_white"),
+        )
+        parts.append(command_line)
+
+    return Group(*parts)
+
+
+def prompt_confirmation(command: str, reason: str) -> bool:
+    """Ask the user to approve a risky command.  Returns True if approved."""
+    body = _build_confirmation_body(command, reason)
 
     console.print()
     console.print(jarv_panel(body, title="safety", subtitle="confirm to run", padding=(1, 2)))
